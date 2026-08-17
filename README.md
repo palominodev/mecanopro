@@ -1,6 +1,6 @@
 # MecanoPro
 
-> Advanced touch typing platform designed specifically for the Spanish keyboard layout and linguistic patterns.
+> Advanced touch typing platform designed specifically for the Spanish keyboard layout and linguistic patterns, with a target milestone of **150 CPM (30 WPM) at $\ge 96\%$ accuracy**.
 
 ## Overview
 
@@ -8,36 +8,39 @@ MecanoPro is a focused, client-side touch typing mastery application. Unlike gen
 
 ---
 
+## The Golden Rule of Touch Typing
+
+> **Accuracy & Consistency > Raw Speed**
+> 
+> Typing speed is a natural byproduct of motor accuracy and rhythm. Typing fast with frequent mistakes collapses net typing speed due to backspacing and disrupts neuromuscular patterning. MecanoPro enforces a strict **$\ge 96\%$ accuracy gate** before allowing progression to subsequent difficulty tiers.
+
+---
+
+## Progressive Difficulty & Curriculum System (Calibrated to 150 CPM Goal)
+
+| Tier | Target CPM | Target WPM | Focus & Unlocking Criteria |
+| :--- | :--- | :--- | :--- |
+| **Tier 1: Foundation** | 50 – 80 CPM | 10 – 16 WPM | Home row basics (`asdf`, `jklñ`). Strict "no looking at keyboard" discipline. $\ge 96\%$ accuracy. |
+| **Tier 2: Key Reach & Vertical Extensions** | 80 – 110 CPM | 16 – 22 WPM | Full alphabet reaches (`t`, `y`, `b`, `n`, `c`, `v`, `m`, `q`, `p`, etc.). $\ge 96\%$ accuracy. |
+| **Tier 3: Spanish Orthography & Diacritics** | 110 – 140 CPM | 22 – 28 WPM | Dead keys & accents (`´` + vowel), `ñ`, punctuation (`¿?`, `¡!`, `;`, `:`). $\ge 96\%$ accuracy. |
+| **Tier 4: Fluency & Adaptive Mastery** | **150+ CPM** | **30+ WPM** | Full Spanish vocabulary, digrahs (`rr`, `ll`, `ch`), real prose, and adaptive drills on weak keys. $\ge 96\%$ accuracy. |
+
+---
+
 ## Core Pillars & Features
 
-### 1. Progressive Difficulty & Curriculum System
-- **Tier 1: Foundation (Home Row & Guide Keys)**
-  - Home row basics (`asdf`, `jklñ`).
-  - Vertical finger reaching and index extensions (`g`, `h`, `t`, `y`, `b`, `n`, `v`, `m`, `c`, `x`, `z`, `q`, `w`, `e`, `r`, `u`, `i`, `o`, `p`).
-- **Tier 2: Spanish Orthography & Special Characters**
-  - Dead keys & accents (`´` + vowel: `á`, `é`, `í`, `ó`, `ú`).
-  - The `ñ` key and uppercase diacritics.
-  - Special punctuation (`¿?`, `¡!`, `«»`, `—`, `;`, `:`).
-  - Numbers and symbol rows.
-- **Tier 3: Lexical & Real-World Fluency**
-  - High-frequency Spanish word lemmas (1,000 most common words).
-  - Tricky consonant clusters (`cc`, `rr`, `ll`, `mb`, `nv`, `ns`, `tl`).
-  - Literary, technical, and code snippets in Spanish.
-- **Tier 4: Adaptive / Weak-Key Drill Mode**
-  - Dynamic generation of drills focusing on keys with highest error rate and latency.
-
-### 2. Metrics & Analytics Engine
-- **Speed**: Raw WPM (Words Per Minute), Net WPM, and CPM (Characters Per Minute).
+### 1. Metrics & Analytics Engine
+- **Speed**: CPM (Characters Per Minute / pulsaciones por minuto), Raw WPM, and Net WPM (penalizing uncorrected errors).
 - **Precision**: Accuracy percentage, consistency index (standard deviation of keystroke intervals).
 - **Diagnostics**:
   - Heatmap of error frequency per key.
   - Latency breakdown per finger/hand.
   - Accidental key substitutions matrix.
 
-### 3. State & Persistence
+### 2. State & Persistence
 - **Storage Layer**: Offline-first via `IndexedDB` with fallback to `localStorage`.
 - **Data Portability**: Full export and import of historical stats and user profile (JSON).
-- **Progress Tracking**: Level unlocks, historical trend charts, personal records (PRs), and milestone achievements.
+- **Progress Tracking**: Tier milestones, historical trend charts, personal records (PRs), and weak-key analytics.
 
 ---
 
@@ -49,7 +52,7 @@ The project follows a **Decoupled Architecture** separating pure domain logic fr
 src/
 ├── core/                  # Pure TypeScript domain & logic (Zero DOM dependencies)
 │   ├── engine/            # Typing session state machine & keystroke evaluator
-│   ├── metrics/           # WPM, accuracy, consistency, and heatmap calculators
+│   ├── metrics/           # CPM, WPM, accuracy, consistency, and heatmap calculators
 │   ├── curriculum/        # Levels, lessons, and adaptive text generators
 │   └── storage/           # Repository pattern for progress and session records
 │

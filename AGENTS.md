@@ -4,9 +4,13 @@ This document sets architectural boundaries, design contracts, and implementatio
 
 ---
 
-## 1. Architectural Invariants
+## 1. Architectural Invariants & The Golden Rule
 
-### 1.1 Strict Separation of Concerns
+### 1.1 The Golden Rule of Touch Typing
+- **Accuracy & Consistency > Raw Speed**: Speed is a natural byproduct of motor accuracy.
+- **Progression Gate Invariant**: An agent or curriculum evaluator must NEVER unlock the next level or tier if accuracy is $< 96\%$, regardless of CPM.
+
+### 1.2 Strict Separation of Concerns
 ```
 [ Input Event (UI / Keyboard) ]
               │
@@ -46,17 +50,22 @@ export interface KeyStroke {
 }
 ```
 
-### 2.2 Metrics Definitions
-- **Raw WPM**: `(Total Keystrokes / 5) / (Elapsed Minutes)`
-- **Net WPM**: `Raw WPM - (Uncorrected Errors / Elapsed Minutes)` (Floor at 0).
+### 2.2 Metrics Definitions & Formulas
+- **CPM (Characters Per Minute)**: `(Total Keystrokes / Elapsed Seconds) * 60`
+- **Raw WPM**: `(Total Keystrokes / 5) / (Elapsed Minutes)` (Equivalent to `CPM / 5`).
+- **Net WPM**: `Raw WPM - (Uncorrected Errors / Elapsed Minutes)` (Floored at 0).
 - **Accuracy (%)**: `(Correct Keystrokes / Total Keystrokes) * 100`
 - **Consistency (%)**: Keystroke interval standard deviation normalized against mean latency.
 
-### 2.3 Level Progression & Mastery Criteria
-- To unlock the next level/lesson:
-  1. Minimum **Accuracy**: $\ge 96\%$
-  2. Minimum **Speed threshold**: Defined per tier (e.g., Tier 1: 25 WPM, Tier 2: 35 WPM, Tier 3: 45 WPM).
-  3. No unhandled dead-key repeats.
+### 2.3 Level Progression Gates (Calibrated to 150 CPM Target)
+To unlock the next level/lesson, the session must satisfy ALL of:
+1. **Accuracy**: $\ge 96\%$
+2. **Speed Threshold per Tier**:
+   - **Tier 1 (Foundation)**: $\ge 50\text{ CPM}$ ($10\text{ WPM}$)
+   - **Tier 2 (Full Alphabet)**: $\ge 80\text{ CPM}$ ($16\text{ WPM}$)
+   - **Tier 3 (Spanish Orthography)**: $\ge 110\text{ CPM}$ ($22\text{ WPM}$)
+   - **Tier 4 (Fluency & Mastery)**: $\ge 150\text{ CPM}$ ($30\text{ WPM}$)
+3. **No unhandled dead-key repeats**.
 
 ---
 
@@ -65,7 +74,7 @@ export interface KeyStroke {
 Handling Spanish text requires specific considerations:
 1. **Dead Keys & Accents**: `´` (acute accent) followed by `a/e/i/o/u` produces `á/é/í/ó/ú`. The engine must accurately track dead key composition states without false error triggers.
 2. **Diacritics & Characters**: Full support for `ñ`, `Ñ`, `ü`, `Ü`, `¿`, `¡`, `«`, `»`.
-3. **Word Granularity**: Standard 5-character word length applies for standardized WPM calculations, but UI cursor navigation must respect grapheme clusters and Spanish orthographic word boundaries.
+3. **Word Granularity**: Standard 5-character word length applies for standardized WPM calculations (`CPM / 5`), but UI cursor navigation must respect grapheme clusters and Spanish orthographic word boundaries.
 
 ---
 
