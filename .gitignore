@@ -4,3 +4,8 @@ dist/
 *.local
 .env
 .codegraph/
+
+
+# Added by cargo
+
+/target

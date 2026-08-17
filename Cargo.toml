@@ -1,0 +1,19 @@
+[package]
+name = "mecanopro"
+version = "0.1.0"
+edition = "2024"
+authors = ["palominodev"]
+description = "Terminal touch typing tutor in Rust tailored for the Spanish layout"
+
+[dependencies]
+ratatui = "0.29"
+crossterm = "0.28"
+unicode-segmentation = "1.12"
+unicode-width = "0.2"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+dirs = "6.0"
+rand = "0.8"
+
+[dev-dependencies]
+tempfile = "3.17"
