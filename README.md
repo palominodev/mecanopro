@@ -93,12 +93,15 @@ src/
 
 ---
 
-## Quick Start
+## Quick Start & Global CLI Access
 
 ```bash
-# Build and run
+# Run directly from anywhere in your terminal
+mecanopro
+
+# Or build and run from source repository
 cargo run --release
 
-# Run unit and integration tests
+# Run automated tests
 cargo test
 ```
