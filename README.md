@@ -1,10 +1,10 @@
 # MecanoPro
 
-> Advanced touch typing platform in the terminal (TUI) designed specifically for the Spanish keyboard layout and linguistic patterns, with a target milestone of **150 CPM (30 WPM) at $\ge 96\%$ accuracy**.
+> High-performance terminal (TUI) touch typing tutor in Rust, tailored for the Spanish keyboard layout and orthography, with a mastery target of **150 CPM (30 WPM) at $\ge 96\%$ accuracy**.
 
 ## Overview
 
-MecanoPro is a lightweight, distraction-free **Terminal User Interface (TUI)** application for mastering touch typing. Engineered specifically for the phonotactics, orthography, and keyboard ergonomics of the Spanish language (including dead keys/tildes `á é í ó ú`, diaeresis `ü`, `ñ`, inverted punctuation `¿ ¡`, and common Spanish bigrams/trigrams).
+MecanoPro is a lightweight, distraction-free **Terminal User Interface (TUI)** built in Rust. It is engineered specifically around the phonotactics, orthography, and keyboard ergonomics of the Spanish language (dead keys/tildes `á é í ó ú`, diaeresis `ü`, `ñ`, inverted punctuation `¿ ¡`, and high-frequency Spanish bigrams/trigrams).
 
 ---
 
@@ -16,26 +16,26 @@ MecanoPro is a lightweight, distraction-free **Terminal User Interface (TUI)** a
 
 ---
 
-## Progressive Difficulty & Curriculum System (Calibrated to 150 CPM Goal)
+## Progressive Difficulty & Curriculum (150 CPM Target)
 
 | Tier | Target CPM | Target WPM | Focus & Unlocking Criteria |
 | :--- | :--- | :--- | :--- |
 | **Tier 1: Foundation** | 50 – 80 CPM | 10 – 16 WPM | Home row basics (`asdf`, `jklñ`). Strict "no looking at keyboard" discipline. $\ge 96\%$ accuracy. |
-| **Tier 2: Key Reach & Vertical Extensions** | 80 – 110 CPM | 16 – 22 WPM | Full alphabet reaches (`t`, `y`, `b`, `n`, `c`, `v`, `m`, `q`, `p`, etc.). $\ge 96\%$ accuracy. |
-| **Tier 3: Spanish Orthography & Diacritics** | 110 – 140 CPM | 22 – 28 WPM | Dead keys & accents (`´` + vowel), `ñ`, punctuation (`¿?`, `¡!`, `;`, `:`). $\ge 96\%$ accuracy. |
-| **Tier 4: Fluency & Adaptive Mastery** | **150+ CPM** | **30+ WPM** | Full Spanish vocabulary, digraphs (`rr`, `ll`, `ch`), real prose, and adaptive drills on weak keys. $\ge 96\%$ accuracy. |
+| **Tier 2: Full Alphabet & Reach** | 80 – 110 CPM | 16 – 22 WPM | Full alphabet reaches (`t`, `y`, `b`, `n`, `c`, `v`, `m`, `q`, `p`, etc.). $\ge 96\%$ accuracy. |
+| **Tier 3: Spanish Orthography** | 110 – 140 CPM | 22 – 28 WPM | Dead keys & accents (`´` + vowel), `ñ`, punctuation (`¿?`, `¡!`, `;`, `:`). $\ge 96\%$ accuracy. |
+| **Tier 4: Fluency & Adaptive Mastery** | **150+ CPM** | **30+ WPM** | Full Spanish vocabulary, digraphs (`rr`, `ll`, `ch`), real prose, and adaptive weak-key drills. $\ge 96\%$ accuracy. |
 
 ---
 
 ## Core Pillars & Features
 
-### 1. Terminal UI Experience (TUI)
-- Minimalist, distraction-free terminal interface.
-- Real-time keystroke feedback, cursor animation, and live WPM/CPM gauges.
-- Interactive keyboard map visualizer rendered directly with ANSI/Unicode blocks.
-- Full keyboard navigation (zero mouse required).
+### 1. Terminal UI Experience (Ratatui + Crossterm)
+- Ultra-low latency, zero-lag keystroke feedback.
+- Real-time CPM/WPM gauges and live accuracy monitors.
+- Interactive keyboard map visualizer rendered directly with Unicode/ANSI blocks.
+- 100% keyboard-driven workflow with vim-friendly and intuitive keybindings.
 
-### 2. Metrics & Analytics Engine
+### 2. Analytics & Diagnostics Engine
 - **Speed**: CPM (Characters Per Minute), Raw WPM, and Net WPM.
 - **Precision**: Accuracy percentage and consistency index (standard deviation of keystroke latency).
 - **Diagnostics**:
@@ -43,60 +43,62 @@ MecanoPro is a lightweight, distraction-free **Terminal User Interface (TUI)** a
   - Latency breakdown per hand/finger.
   - Common confusion / substitution matrix.
 
-### 3. State & Persistence (XDG Compliant)
-- **Storage Layer**: Local filesystem storage following XDG Base Directory specification (`~/.local/share/mecanopro/progress.json`).
-- **Data Portability**: JSON export/import of historical sessions and stats.
-- **Progress Tracking**: Tier unlock states, personal bests, and weak-key records.
+### 3. Persistence (XDG Standard)
+- Stored locally at `$XDG_DATA_HOME/mecanopro/progress.json` (or `~/.local/share/mecanopro/`).
+- Export and import session history as JSON.
+- Track tier unlocks, personal bests, and weak keys over time.
 
 ---
 
 ## Architecture
 
-The project follows a **Decoupled Architecture** separating pure domain logic from terminal rendering:
+Clean/Hexagonal Architecture separating pure domain logic from terminal rendering:
 
 ```
 src/
-├── core/                  # Pure TypeScript domain & logic (Zero I/O or Terminal dependencies)
-│   ├── engine/            # Typing session state machine & keystroke evaluator
-│   ├── metrics/           # CPM, WPM, accuracy, consistency, and heatmap calculators
-│   ├── curriculum/        # Levels, lessons, and adaptive text generators
-│   └── storage/           # Repository interfaces and progress data structures
+├── core/                  # Pure Rust domain (Zero crossterm/ratatui dependency)
+│   ├── engine.rs          # Typing session state machine & keystroke evaluator
+│   ├── metrics.rs         # CPM, WPM, accuracy, consistency, and heatmap calculators
+│   ├── curriculum.rs      # Tiers, lessons, and adaptive text generators
+│   └── model.rs           # Core domain types (KeyStroke, Session, Metrics)
 │
 ├── tui/                   # Presentation & Terminal I/O layer
-│   ├── screen/            # Terminal screen buffer management & render loop
-│   ├── input/             # Raw mode stdin handler, UTF-8 decoder & dead key parser
-│   ├── views/             # Practice view, level selector, stats dashboard, keyboard map
-│   └── theme/             # ANSI 256/TrueColor palettes and styling tokens
+│   ├── app.rs             # Application state coordinator & event loop
+│   ├── event.rs           # Terminal input event stream (Crossterm backend)
+│   ├── ui.rs              # Ratatui rendering pipeline
+│   ├── components/        # Practice area, stats dashboard, keyboard visualizer
+│   └── theme.rs           # Color palettes and styling tokens
 │
-├── storage/               # Filesystem XDG persistence implementation
-└── index.ts               # CLI entrypoint and DI wiring
+├── storage/               # XDG filesystem persistence (serde_json)
+│   └── repository.rs
+│
+└── main.rs                # Entrypoint & DI wiring
 ```
 
 ### Key Architectural Invariants
-1. **Headless Domain Core**: The typing engine and metrics calculators can run in tests with zero terminal/TTY dependencies.
-2. **Terminal Raw Mode & UTF-8 Decoder**: Handles multibyte UTF-8 characters and dead-key terminal escape sequences cleanly without blocking.
-3. **High-Resolution Clock**: Precision metrics calculated via `process.hrtime.bigint()` or `performance.now()`.
+1. **Headless Domain Core**: `src/core/` compiles and runs independently of any terminal backend, making unit testing lightning fast via `cargo test`.
+2. **UTF-8 & Unicode Correctness**: Spanish characters (`ñ`, `á`, `¿`) and dead key combinations are handled via Unicode grapheme clusters and proper terminal column display width.
+3. **Monotonic Clocks**: All latency and duration calculations use `std::time::Instant`.
 
 ---
 
 ## Technology Stack
 
-- **Runtime**: Node.js ($\ge 18$) / TypeScript (Strict mode)
-- **Terminal Engine**: Raw mode TTY with custom ANSI buffer or lightweight TUI renderer
-- **Testing**: Vitest for 100% automated test coverage across core domain and metrics
-- **Build / Packaging**: `tsup` / `esbuild` for lightweight CLI binary distribution
+- **Language**: Rust (Edition 2021 / 2024)
+- **TUI Framework**: `ratatui` + `crossterm`
+- **Unicode Utilities**: `unicode-segmentation`, `unicode-width`
+- **Serialization**: `serde`, `serde_json`
+- **Directories**: `dirs` (XDG standard compliance)
+- **Testing**: Native `cargo test`
 
 ---
 
 ## Quick Start
 
 ```bash
-# Install dependencies
-npm install
+# Build and run
+cargo run --release
 
-# Run in development mode
-npm run dev
-
-# Run unit test suite
-npm run test
+# Run unit and integration tests
+cargo test
 ```
