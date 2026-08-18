@@ -4,7 +4,7 @@ use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Gauge, Paragraph},
+    widgets::{Gauge, Paragraph},
     Frame,
 };
 
@@ -25,7 +25,7 @@ impl StatsBar {
             ])
             .split(area);
 
-        // 1. CPM Gauge
+        // 1. Warp Speed / CPM
         let cpm_span = vec![
             Line::from(vec![
                 Span::styled("Velocidad: ", Style::default().fg(Theme::MUTED)),
@@ -35,21 +35,21 @@ impl StatsBar {
                 ),
             ]),
             Line::from(vec![
-                Span::styled(format!("({:.1} WPM) Meta: {:.0}", metrics.raw_wpm, engine.lesson.target_cpm), Style::default().fg(Theme::MUTED)),
+                Span::styled(format!("{:.1} WPM  ·  Meta: {:.0}", metrics.raw_wpm, engine.lesson.target_cpm), Style::default().fg(Theme::MUTED)),
             ]),
         ];
         f.render_widget(
             Paragraph::new(cpm_span)
-                .block(Block::default().borders(Borders::ALL).title(" Ritmo "))
+                .block(Theme::retro_block("⚡ PROPULSIÓN", Theme::PRIMARY))
                 .alignment(Alignment::Center),
             chunks[0],
         );
 
-        // 2. Accuracy Block (Golden Rule)
+        // 2. Shields / Precision (Golden Rule)
         let accuracy_color = if is_golden_valid { Theme::SUCCESS } else { Theme::ERROR };
         let accuracy_spans = vec![
             Line::from(vec![
-                Span::styled("Precisión: ", Style::default().fg(Theme::MUTED)),
+                Span::styled("Escudos: ", Style::default().fg(Theme::MUTED)),
                 Span::styled(
                     format!("{:.1}%", metrics.accuracy),
                     Style::default().fg(accuracy_color).add_modifier(Modifier::BOLD),
@@ -57,19 +57,19 @@ impl StatsBar {
             ]),
             Line::from(vec![
                 Span::styled(
-                    if is_golden_valid { "✓ Regla de Oro OK" } else { "⚠ Min. 96% requerido" },
+                    if is_golden_valid { "✓ Escudo Estable (≥96%)" } else { "⚠ Alerta: Requiere ≥96%" },
                     Style::default().fg(accuracy_color),
                 ),
             ]),
         ];
         f.render_widget(
             Paragraph::new(accuracy_spans)
-                .block(Block::default().borders(Borders::ALL).title(" Calidad "))
+                .block(Theme::retro_block("🛡️ ESCUDOS", accuracy_color))
                 .alignment(Alignment::Center),
             chunks[1],
         );
 
-        // 3. Consistency & Time
+        // 3. Telemetry Time & Consistency
         let time_spans = vec![
             Line::from(vec![
                 Span::styled("Tiempo: ", Style::default().fg(Theme::MUTED)),
@@ -79,23 +79,23 @@ impl StatsBar {
                 ),
             ]),
             Line::from(vec![
-                Span::styled(format!("Consistencia: {:.0}%", metrics.consistency), Style::default().fg(Theme::MUTED)),
+                Span::styled(format!("Ritmo: {:.0}% sincro", metrics.consistency), Style::default().fg(Theme::NEBULA_PURPLE)),
             ]),
         ];
         f.render_widget(
             Paragraph::new(time_spans)
-                .block(Block::default().borders(Borders::ALL).title(" Sesión "))
+                .block(Theme::retro_block("⏱️ CRONOMETRÍA", Theme::NEBULA_PURPLE))
                 .alignment(Alignment::Center),
             chunks[2],
         );
 
-        // 4. Progress Gauge
+        // 4. Hyperdrive Jump Progress Gauge
         let progress_pct = (engine.progress_ratio() * 100.0).clamp(0.0, 100.0) as u16;
         let gauge = Gauge::default()
-            .block(Block::default().borders(Borders::ALL).title(" Progreso "))
+            .block(Theme::retro_block("🚀 HIPERSALTO", Theme::ACCENT))
             .gauge_style(
                 Style::default()
-                    .fg(Theme::PRIMARY)
+                    .fg(Theme::ACCENT)
                     .bg(Theme::SURFACE)
                     .add_modifier(Modifier::BOLD),
             )

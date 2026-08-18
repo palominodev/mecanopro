@@ -2,9 +2,8 @@ use crate::core::engine::TypingEngine;
 use crate::tui::theme::Theme;
 use ratatui::{
     layout::Alignment,
-    style::Style,
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph, Wrap},
+    widgets::{Paragraph, Wrap},
 };
 
 pub struct TypingArea;
@@ -36,18 +35,13 @@ impl TypingArea {
         }
 
         let title = if let Some(dead) = engine.pending_dead_key {
-            format!(" Escribiendo... [ Tecla muerta: {} ] ", dead)
+            format!("⚡ TRANSMISIÓN ENTRADA · [ TECLA MUERTA ACTIVA: '{}' ]", dead)
         } else {
-            format!(" Lección: {} ", engine.lesson.title)
+            format!("✦ TRANSMISIÓN DE VUELO: {} ✦", engine.lesson.title)
         };
 
         Paragraph::new(Line::from(spans))
-            .block(
-                Block::default()
-                    .title(title)
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(Theme::PRIMARY)),
-            )
+            .block(Theme::retro_block(&title, Theme::PRIMARY))
             .wrap(Wrap { trim: false })
             .alignment(Alignment::Left)
     }

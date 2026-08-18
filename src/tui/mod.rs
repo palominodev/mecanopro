@@ -1,4 +1,5 @@
 pub mod app;
+pub mod ascii;
 pub mod components;
 pub mod event;
 pub mod theme;

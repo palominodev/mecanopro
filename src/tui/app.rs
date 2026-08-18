@@ -1,7 +1,9 @@
+use crate::audio::SystemTtsSpeaker;
 use crate::core::curriculum::Curriculum;
+use crate::core::dictation::{DictationConfig, DictationEngine, DictationMetrics};
 use crate::core::engine::TypingEngine;
 use crate::core::metrics::MetricsCalculator;
-use crate::core::model::{Lesson, SessionMetrics, UserProgress};
+use crate::core::model::{Lesson, SessionMetrics, Tier, UserProgress};
 use crate::storage::ProgressRepository;
 use std::time::Instant;
 
@@ -11,6 +13,8 @@ pub enum CurrentView {
     Practice,
     Summary,
     Stats,
+    Dictation,
+    DictationSummary,
 }
 
 pub struct App {
@@ -21,6 +25,9 @@ pub struct App {
     pub current_engine: Option<TypingEngine>,
     pub last_session_metrics: Option<SessionMetrics>,
     pub last_session_passed: bool,
+    pub current_dictation: Option<DictationEngine>,
+    pub last_dictation_metrics: Option<DictationMetrics>,
+    pub tts_speaker: SystemTtsSpeaker,
     pub should_quit: bool,
 }
 
@@ -28,6 +35,7 @@ impl App {
     pub fn new() -> Self {
         let repository = ProgressRepository::new();
         let user_progress = repository.load();
+        let tts_speaker = SystemTtsSpeaker::new();
 
         Self {
             current_view: CurrentView::MainMenu,
@@ -37,6 +45,9 @@ impl App {
             current_engine: None,
             last_session_metrics: None,
             last_session_passed: false,
+            current_dictation: None,
+            last_dictation_metrics: None,
+            tts_speaker,
             should_quit: false,
         }
     }
@@ -123,8 +134,127 @@ impl App {
     }
 
     pub fn move_selection_down(&mut self) {
-        if self.selected_lesson_index + 1 < self.available_lessons().len() {
+        let max = self.available_lessons().len().saturating_sub(1);
+        if self.selected_lesson_index < max {
             self.selected_lesson_index += 1;
+        }
+    }
+
+    pub fn scroll_page_up(&mut self, amount: usize) {
+        self.selected_lesson_index = self.selected_lesson_index.saturating_sub(amount);
+    }
+
+    pub fn scroll_page_down(&mut self, amount: usize) {
+        let max = self.available_lessons().len().saturating_sub(1);
+        self.selected_lesson_index = (self.selected_lesson_index + amount).min(max);
+    }
+
+    pub fn scroll_to_top(&mut self) {
+        self.selected_lesson_index = 0;
+    }
+
+    pub fn scroll_to_bottom(&mut self) {
+        self.selected_lesson_index = self.available_lessons().len().saturating_sub(1);
+    }
+
+    pub fn start_dictation(&mut self, tier: Option<Tier>, word_count: Option<usize>) {
+        let selected_tier = tier.unwrap_or(self.user_progress.unlocked_tier);
+        let count = word_count.unwrap_or(8);
+        let words = Curriculum::generate_dictation_words(selected_tier, count);
+        let config = DictationConfig::default();
+
+        let mut engine = DictationEngine::new(words, config.clone());
+        if let Some(first_word) = engine.current_word() {
+            self.tts_speaker.speak(first_word, config.speech_rate, config.current_voice_code());
+            engine.mark_audio_finished(Instant::now());
+        }
+
+        self.current_dictation = Some(engine);
+        self.current_view = CurrentView::Dictation;
+    }
+
+    pub fn restart_dictation(&mut self) {
+        if let Some(engine) = &self.current_dictation {
+            let words = engine.words.clone();
+            let config = engine.config.clone();
+            let mut new_engine = DictationEngine::new(words, config.clone());
+            if let Some(first_word) = new_engine.current_word() {
+                self.tts_speaker.speak(first_word, config.speech_rate, config.current_voice_code());
+                new_engine.mark_audio_finished(Instant::now());
+            }
+            self.current_dictation = Some(new_engine);
+            self.current_view = CurrentView::Dictation;
+        }
+    }
+
+    pub fn handle_dictation_key_input(&mut self, ch: char) {
+        if let Some(engine) = &mut self.current_dictation {
+            let rate = engine.config.speech_rate;
+            let voice = engine.config.current_voice_code().to_string();
+            let (word_finished, session_finished) = engine.handle_char(ch, Instant::now());
+
+            if session_finished {
+                let metrics = engine.calculate_metrics();
+                self.last_dictation_metrics = Some(metrics);
+                self.tts_speaker.stop();
+                self.current_view = CurrentView::DictationSummary;
+            } else if let (true, Some(next_word)) = (word_finished, engine.current_word()) {
+                self.tts_speaker.speak(next_word, rate, &voice);
+                engine.mark_audio_finished(Instant::now());
+            }
+        }
+    }
+
+    pub fn replay_dictation_audio(&mut self) {
+        let (word, rate, voice) = match &mut self.current_dictation {
+            Some(engine) => {
+                let word = engine.current_word().map(|w| w.to_string());
+                let rate = engine.config.speech_rate;
+                let voice = engine.config.current_voice_code().to_string();
+                engine.record_replay_request();
+                engine.mark_audio_finished(Instant::now());
+                (word, rate, voice)
+            }
+            None => (None, 1.0, "es_AR-daniela-high".to_string()),
+        };
+
+        if let Some(word) = word {
+            self.tts_speaker.speak(&word, rate, &voice);
+        }
+    }
+
+    pub fn adjust_dictation_speed(&mut self, delta: f32) {
+        let (word, new_rate, voice) = match &mut self.current_dictation {
+            Some(engine) => {
+                let new_rate = ((engine.config.speech_rate + delta).clamp(0.5, 2.0) * 10.0).round() / 10.0;
+                engine.config.speech_rate = new_rate;
+                engine.mark_audio_finished(Instant::now());
+                let voice = engine.config.current_voice_code().to_string();
+                (engine.current_word().map(|w| w.to_string()), new_rate, voice)
+            }
+            None => (None, 1.0, "es_AR-daniela-high".to_string()),
+        };
+
+        if let Some(word) = word {
+            self.tts_speaker.speak(&word, new_rate, &voice);
+        }
+    }
+
+    pub fn toggle_dictation_voice(&mut self) {
+        let (word, rate, voice) = match &mut self.current_dictation {
+            Some(engine) => {
+                engine.config.next_voice();
+                let voice = engine.config.current_voice_code().to_string();
+                let word = engine.current_word().map(|w| w.to_string());
+                let rate = engine.config.speech_rate;
+                engine.mark_audio_finished(Instant::now());
+                (word, rate, voice)
+            }
+            None => (None, 1.0, "es_AR-daniela-high".to_string()),
+        };
+
+        if let Some(word) = word {
+            self.tts_speaker.speak(&word, rate, &voice);
         }
     }
 }
@@ -134,3 +264,4 @@ impl Default for App {
         Self::new()
     }
 }
+

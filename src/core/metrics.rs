@@ -149,11 +149,20 @@ mod tests {
         // Even with high CPM, should NOT pass Tier 1 because accuracy < 96.0%
         assert!(!MetricsCalculator::meets_progression_gate(&metrics, &Tier::Tier1Foundation));
 
-        // Once accuracy is >= 96.0% and CPM >= 50, it passes
+        // Once accuracy is >= 96.0% and CPM >= 50, check progression against tier thresholds
         metrics.accuracy = 96.0;
         assert!(MetricsCalculator::meets_progression_gate(&metrics, &Tier::Tier1Foundation));
         assert!(MetricsCalculator::meets_progression_gate(&metrics, &Tier::Tier2FullAlphabet));
         assert!(MetricsCalculator::meets_progression_gate(&metrics, &Tier::Tier3SpanishOrthography));
-        assert!(MetricsCalculator::meets_progression_gate(&metrics, &Tier::Tier4Mastery));
+        // With CPM 200, it cannot pass Tier 4 (needs 275 CPM) or Tier 7 (needs 750 CPM)
+        assert!(!MetricsCalculator::meets_progression_gate(&metrics, &Tier::Tier4NumbersAndSymbols));
+        assert!(!MetricsCalculator::meets_progression_gate(&metrics, &Tier::Tier7GrandMaster));
+
+        // When CPM reaches 750+ (150 WPM) with accuracy >= 96.0%, it unlocks Grand Master
+        metrics.cpm = 750.0;
+        assert!(MetricsCalculator::meets_progression_gate(&metrics, &Tier::Tier4NumbersAndSymbols));
+        assert!(MetricsCalculator::meets_progression_gate(&metrics, &Tier::Tier5SpeedAndCadence));
+        assert!(MetricsCalculator::meets_progression_gate(&metrics, &Tier::Tier6AdvancedFluency));
+        assert!(MetricsCalculator::meets_progression_gate(&metrics, &Tier::Tier7GrandMaster));
     }
 }

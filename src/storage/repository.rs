@@ -91,7 +91,10 @@ impl ProgressRepository {
             progress.unlocked_tier = match (progress.unlocked_tier, tier) {
                 (Tier::Tier1Foundation, Tier::Tier1Foundation) => Tier::Tier2FullAlphabet,
                 (Tier::Tier2FullAlphabet, Tier::Tier2FullAlphabet) => Tier::Tier3SpanishOrthography,
-                (Tier::Tier3SpanishOrthography, Tier::Tier3SpanishOrthography) => Tier::Tier4Mastery,
+                (Tier::Tier3SpanishOrthography, Tier::Tier3SpanishOrthography) => Tier::Tier4NumbersAndSymbols,
+                (Tier::Tier4NumbersAndSymbols, Tier::Tier4NumbersAndSymbols) => Tier::Tier5SpeedAndCadence,
+                (Tier::Tier5SpeedAndCadence, Tier::Tier5SpeedAndCadence) => Tier::Tier6AdvancedFluency,
+                (Tier::Tier6AdvancedFluency, Tier::Tier6AdvancedFluency) => Tier::Tier7GrandMaster,
                 (current, _) => current,
             };
         }

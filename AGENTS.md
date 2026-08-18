@@ -72,14 +72,17 @@ pub struct SessionMetrics {
 - **Accuracy (%)**: `(correct_keystrokes as f64 / total_keystrokes as f64) * 100.0`.
 - **Consistency (%)**: Keystroke latency standard deviation normalized against mean latency.
 
-### 2.3 Level Progression Gates (150 CPM Target)
+### 2.3 Level Progression Gates (150 WPM / 750 CPM Target)
 To unlock the next level/lesson, the session must satisfy ALL of:
 1. **Accuracy**: $\ge 96.0\%$
 2. **Speed Threshold per Tier**:
    - **Tier 1 (Foundation)**: $\ge 50.0\text{ CPM}$ ($10\text{ WPM}$)
-   - **Tier 2 (Full Alphabet)**: $\ge 80.0\text{ CPM}$ ($16\text{ WPM}$)
-   - **Tier 3 (Spanish Orthography)**: $\ge 110.0\text{ CPM}$ ($22\text{ WPM}$)
-   - **Tier 4 (Fluency & Mastery)**: $\ge 150.0\text{ CPM}$ ($30\text{ WPM}$)
+   - **Tier 2 (Full Alphabet)**: $\ge 100.0\text{ CPM}$ ($20\text{ WPM}$)
+   - **Tier 3 (Spanish Orthography)**: $\ge 175.0\text{ CPM}$ ($35\text{ WPM}$)
+   - **Tier 4 (Numbers & Code Symbols)**: $\ge 275.0\text{ CPM}$ ($55\text{ WPM}$)
+   - **Tier 5 (Speed & Cadence)**: $\ge 400.0\text{ CPM}$ ($80\text{ WPM}$)
+   - **Tier 6 (Advanced Fluency & Endurance)**: $\ge 550.0\text{ CPM}$ ($110\text{ WPM}$)
+   - **Tier 7 (Grand Master Hiperespacio)**: $\ge 750.0\text{ CPM}$ ($150\text{ WPM}$)
 
 ---
 

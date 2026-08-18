@@ -2,21 +2,27 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::Duration;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum Tier {
     Tier1Foundation,
     Tier2FullAlphabet,
     Tier3SpanishOrthography,
-    Tier4Mastery,
+    Tier4NumbersAndSymbols,
+    Tier5SpeedAndCadence,
+    Tier6AdvancedFluency,
+    Tier7GrandMaster,
 }
 
 impl Tier {
     pub const fn min_cpm(&self) -> f64 {
         match self {
             Self::Tier1Foundation => 50.0,
-            Self::Tier2FullAlphabet => 80.0,
-            Self::Tier3SpanishOrthography => 110.0,
-            Self::Tier4Mastery => 150.0,
+            Self::Tier2FullAlphabet => 100.0,
+            Self::Tier3SpanishOrthography => 175.0,
+            Self::Tier4NumbersAndSymbols => 275.0,
+            Self::Tier5SpeedAndCadence => 400.0,
+            Self::Tier6AdvancedFluency => 550.0,
+            Self::Tier7GrandMaster => 750.0,
         }
     }
 
@@ -26,10 +32,13 @@ impl Tier {
 
     pub const fn name(&self) -> &'static str {
         match self {
-            Self::Tier1Foundation => "Nivel 1: Cimientos (Fila Guía)",
-            Self::Tier2FullAlphabet => "Nivel 2: Alfabeto Completo",
-            Self::Tier3SpanishOrthography => "Nivel 3: Ortografía y Diacríticos",
-            Self::Tier4Mastery => "Nivel 4: Fluidez y Maestría (150 CPM)",
+            Self::Tier1Foundation => "Nivel 1: Cimientos (Fila Guía - 10 WPM)",
+            Self::Tier2FullAlphabet => "Nivel 2: Alfabeto Completo (20 WPM)",
+            Self::Tier3SpanishOrthography => "Nivel 3: Ortografía y Diacríticos (35 WPM)",
+            Self::Tier4NumbersAndSymbols => "Nivel 4: Números y Símbolos (55 WPM)",
+            Self::Tier5SpeedAndCadence => "Nivel 5: Velocidad y Cadencia (80 WPM)",
+            Self::Tier6AdvancedFluency => "Nivel 6: Fluidez y Resistencia (110 WPM)",
+            Self::Tier7GrandMaster => "Nivel 7: Maestría Hiperespacial (150 WPM)",
         }
     }
 }
