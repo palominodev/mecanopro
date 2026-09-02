@@ -27,15 +27,21 @@ impl EventHandler {
         Ok(())
     }
 
-    /// Handles a mouse event against the last known frame `area`. Like
-    /// [`Self::handle_key`], any in-flight ship animation is snapped to its
-    /// destination first so the event never has to wait for it.
-    fn handle_mouse(app: &mut App, m: MouseEvent, area: Rect) -> io::Result<()> {
+    /// Snaps any in-flight ship animation to its destination instantly,
+    /// so an event that actually acts on the map never has to wait for it.
+    fn finish_animation(app: &mut App) {
         if !app.ship.is_idle() {
             app.ship.complete();
         }
+    }
 
+    /// Handles a mouse event against the last known frame `area`. Only mouse
+    /// kinds that actually act on the map (`Down(Left)`, `ScrollUp`,
+    /// `ScrollDown`) interrupt an in-flight ship animation; passive kinds
+    /// like `Moved`/`Drag`/`Up`/`Down(Right)` are fully ignored.
+    fn handle_mouse(app: &mut App, m: MouseEvent, area: Rect) -> io::Result<()> {
         if let MouseEventKind::Down(MouseButton::Left) = m.kind {
+            Self::finish_animation(app);
             let pos = Position::new(m.column, m.row);
             match app.current_view {
                 CurrentView::MainMenu => {
@@ -51,16 +57,22 @@ impl EventHandler {
         }
 
         match m.kind {
-            MouseEventKind::ScrollUp => match app.current_view {
-                CurrentView::MainMenu => app.move_planet_up(),
-                CurrentView::PlanetLessons => app.move_selection_up(),
-                _ => {}
-            },
-            MouseEventKind::ScrollDown => match app.current_view {
-                CurrentView::MainMenu => app.move_planet_down(),
-                CurrentView::PlanetLessons => app.move_selection_down(),
-                _ => {}
-            },
+            MouseEventKind::ScrollUp => {
+                Self::finish_animation(app);
+                match app.current_view {
+                    CurrentView::MainMenu => app.move_planet_up(),
+                    CurrentView::PlanetLessons => app.move_selection_up(),
+                    _ => {}
+                }
+            }
+            MouseEventKind::ScrollDown => {
+                Self::finish_animation(app);
+                match app.current_view {
+                    CurrentView::MainMenu => app.move_planet_down(),
+                    CurrentView::PlanetLessons => app.move_selection_down(),
+                    _ => {}
+                }
+            }
             _ => {}
         }
 
@@ -310,6 +322,35 @@ mod tests {
     }
 
     #[test]
+    fn test_mouse_motion_does_not_complete_animation() {
+        let mut app = App::new();
+        app.user_progress = UserProgress::default();
+        app.selected_planet_index = 0;
+        app.move_planet_down();
+        assert_eq!(app.ship.phase(), crate::tui::animation::ShipPhase::Traveling);
+        let position_before = app.ship.position();
+
+        let area = Rect::new(0, 0, 120, 40);
+        for kind in [
+            MouseEventKind::Moved,
+            MouseEventKind::Drag(MouseButton::Left),
+            MouseEventKind::Up(MouseButton::Left),
+            MouseEventKind::Down(MouseButton::Right),
+        ] {
+            EventHandler::handle_mouse(&mut app, mouse(kind, Position::new(0, 0)), area).unwrap();
+            assert_eq!(
+                app.ship.phase(),
+                crate::tui::animation::ShipPhase::Traveling,
+                "kind {kind:?} must not complete the in-flight animation"
+            );
+            assert!(
+                (app.ship.position() - position_before).abs() < 1e-5,
+                "kind {kind:?} must not change ship position"
+            );
+        }
+    }
+
+    #[test]
     fn test_non_click_mouse_kinds_ignored() {
         let area = Rect::new(0, 0, 120, 40);
         let cards = planet_layout(map_body_area(area));
@@ -484,5 +525,127 @@ mod tests {
             Tier::Tier5SpeedAndCadence.index(),
             "Dictation back must derive the planet from the selected lesson via return_to_star_map"
         );
+    }
+
+    /// Expected observable effect of one `MainMenu` key binding.
+    #[derive(Debug)]
+    enum MenuEffect {
+        PlanetIndex(usize),
+        View(CurrentView),
+        Quit,
+    }
+
+    #[test]
+    fn test_map_key_bindings() {
+        // `d` (adaptive drill) is intentionally skipped: it needs real key
+        // stats/audio wiring, already covered indirectly by
+        // `test_return_from_session_adaptive_drill_goes_to_star_map` in `app.rs`.
+        let cases: Vec<(&str, usize, KeyEvent, MenuEffect)> = vec![
+            ("Down", 0, key(KeyCode::Down), MenuEffect::PlanetIndex(1)),
+            ("j", 0, key(KeyCode::Char('j')), MenuEffect::PlanetIndex(1)),
+            ("Up", 3, key(KeyCode::Up), MenuEffect::PlanetIndex(2)),
+            ("k", 3, key(KeyCode::Char('k')), MenuEffect::PlanetIndex(2)),
+            ("End", 0, key(KeyCode::End), MenuEffect::PlanetIndex(6)),
+            ("G", 0, key(KeyCode::Char('G')), MenuEffect::PlanetIndex(6)),
+            ("Home", 4, key(KeyCode::Home), MenuEffect::PlanetIndex(0)),
+            ("g", 4, key(KeyCode::Char('g')), MenuEffect::PlanetIndex(0)),
+            ("Right", 2, key(KeyCode::Right), MenuEffect::View(CurrentView::PlanetLessons)),
+            ("l", 2, key(KeyCode::Char('l')), MenuEffect::View(CurrentView::PlanetLessons)),
+            ("e", 0, key(KeyCode::Char('e')), MenuEffect::View(CurrentView::Stats)),
+            ("v", 0, key(KeyCode::Char('v')), MenuEffect::View(CurrentView::Dictation)),
+            ("q", 0, key(KeyCode::Char('q')), MenuEffect::Quit),
+            ("Ctrl+c", 0, KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL), MenuEffect::Quit),
+        ];
+
+        for (label, start_index, evt, effect) in cases {
+            let mut app = App::new();
+            app.user_progress = UserProgress::default();
+            app.selected_planet_index = start_index;
+
+            EventHandler::handle_key(&mut app, evt);
+
+            match effect {
+                MenuEffect::PlanetIndex(expected) => assert_eq!(
+                    app.selected_planet_index, expected,
+                    "key {label} ({evt:?}) must set selected_planet_index to {expected}"
+                ),
+                MenuEffect::View(expected) => assert_eq!(
+                    app.current_view, expected,
+                    "key {label} ({evt:?}) must set current_view to {expected:?}"
+                ),
+                MenuEffect::Quit => assert!(app.should_quit, "key {label} ({evt:?}) must set should_quit"),
+            }
+        }
+    }
+
+    #[test]
+    fn test_planet_lessons_key_bindings() {
+        fn enter_tier1() -> App {
+            let mut app = App::new();
+            app.user_progress = UserProgress::default();
+            app.selected_planet_index = Tier::Tier1Foundation.index();
+            app.enter_planet_lessons();
+            app
+        }
+
+        let tier1_lessons: Vec<_> = App::new()
+            .available_lessons()
+            .into_iter()
+            .filter(|l| l.tier == Tier::Tier1Foundation)
+            .collect();
+        let first_idx = App::new().flat_index_of(&tier1_lessons.first().unwrap().id).unwrap();
+        let last_idx = App::new().flat_index_of(&tier1_lessons.last().unwrap().id).unwrap();
+
+        // Enter starts practice on the currently selected lesson.
+        let mut app = enter_tier1();
+        EventHandler::handle_key(&mut app, key(KeyCode::Enter));
+        assert_eq!(app.current_view, CurrentView::Practice, "Enter must start practice");
+
+        // PageDown / Ctrl+f / Ctrl+d advance the selection by PAGE_SIZE, clamped to the tier's last lesson.
+        for evt in [
+            key(KeyCode::PageDown),
+            KeyEvent::new(KeyCode::Char('f'), KeyModifiers::CONTROL),
+            KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL),
+        ] {
+            let mut app = enter_tier1();
+            app.selected_lesson_index = first_idx;
+            EventHandler::handle_key(&mut app, evt);
+            assert_eq!(
+                app.selected_lesson_index,
+                (first_idx + PAGE_SIZE).min(last_idx),
+                "key {evt:?} must advance the selection by PAGE_SIZE, clamped"
+            );
+        }
+
+        // PageUp / Ctrl+b / Ctrl+u move the selection back by PAGE_SIZE, clamped to the tier's first lesson.
+        for evt in [
+            key(KeyCode::PageUp),
+            KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL),
+            KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL),
+        ] {
+            let mut app = enter_tier1();
+            app.selected_lesson_index = last_idx;
+            EventHandler::handle_key(&mut app, evt);
+            assert_eq!(
+                app.selected_lesson_index,
+                last_idx.saturating_sub(PAGE_SIZE).max(first_idx),
+                "key {evt:?} must move the selection back by PAGE_SIZE, clamped"
+            );
+        }
+
+        // End / G jump to the last lesson of the tier.
+        for evt in [key(KeyCode::End), key(KeyCode::Char('G'))] {
+            let mut app = enter_tier1();
+            EventHandler::handle_key(&mut app, evt);
+            assert_eq!(app.selected_lesson_index, last_idx, "key {evt:?} must select the tier's last lesson");
+        }
+
+        // Home / g jump to the first lesson of the tier.
+        for evt in [key(KeyCode::Home), key(KeyCode::Char('g'))] {
+            let mut app = enter_tier1();
+            app.selected_lesson_index = last_idx;
+            EventHandler::handle_key(&mut app, evt);
+            assert_eq!(app.selected_lesson_index, first_idx, "key {evt:?} must select the tier's first lesson");
+        }
     }
 }

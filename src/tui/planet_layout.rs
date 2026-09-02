@@ -8,11 +8,13 @@ use crate::core::model::{Lesson, Section};
 use ratatui::layout::{Constraint, Direction, Layout, Position, Rect};
 
 /// Minimum terminal width (in columns) required to render the full galaxy
-/// map with a dedicated ship gutter.
-pub const MIN_FULL_WIDTH: u16 = 64;
+/// map with a dedicated ship gutter. Lowered from 64 so common 80-column
+/// terminals reach Full mode (80 * 62% map-body split = 49 >= 46).
+pub const MIN_FULL_WIDTH: u16 = 46;
 /// Minimum terminal height (in rows) required to render the full galaxy
-/// map with a dedicated ship gutter.
-pub const MIN_FULL_HEIGHT: u16 = 30;
+/// map with a dedicated ship gutter. Lowered from 30 so common 24-row
+/// terminals reach Full mode (24 - 9 header/footer rows = 15 >= 14).
+pub const MIN_FULL_HEIGHT: u16 = 14;
 /// Height (in rows) of a single planet card in [`MapMode::Full`].
 pub const PLANET_CARD_HEIGHT: u16 = 3;
 /// Width (in columns) of the ship gutter column in [`MapMode::Full`].
@@ -381,10 +383,10 @@ mod tests {
     }
 
     #[test]
-    fn test_map_mode_boundary_63x29_vs_64x30() {
-        assert_eq!(map_mode(Rect::new(0, 0, 63, 30)), MapMode::Compact);
-        assert_eq!(map_mode(Rect::new(0, 0, 64, 29)), MapMode::Compact);
-        assert_eq!(map_mode(Rect::new(0, 0, 64, 30)), MapMode::Full);
+    fn test_map_mode_boundary_45x14_and_46x13_vs_46x14() {
+        assert_eq!(map_mode(Rect::new(0, 0, 45, 14)), MapMode::Compact);
+        assert_eq!(map_mode(Rect::new(0, 0, 46, 13)), MapMode::Compact);
+        assert_eq!(map_mode(Rect::new(0, 0, 46, 14)), MapMode::Full);
     }
 
     #[test]

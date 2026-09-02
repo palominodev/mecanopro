@@ -606,6 +606,38 @@ mod tests {
     }
 
     #[test]
+    fn test_80x24_terminal_renders_full_mode() {
+        // 80x24 is a very common default terminal size; with the lowered
+        // Full-mode threshold (46x14 on the map body), it must render the
+        // card layout with progress text AND the ship gutter/sprite, not
+        // the cramped Compact layout.
+        let mut app = App::new();
+        app.user_progress = UserProgress::default();
+        app.selected_planet_index = 0;
+
+        let rendered = render_to_string(&app, 80, 24);
+
+        assert!(rendered.contains("sectores"), "expected Full-mode card body text in:\n{rendered}");
+        assert!(rendered.contains("◄███►"), "expected ship sprite in:\n{rendered}");
+    }
+
+    #[test]
+    fn test_full_mode_card_shows_progress_cpm_and_badge() {
+        let mut app = App::new();
+        app.user_progress = UserProgress::default();
+        app.selected_planet_index = 0;
+
+        let rendered = render_to_string(&app, 120, 40);
+
+        assert!(rendered.contains("sectores"), "expected sector count label in:\n{rendered}");
+        assert!(rendered.contains("meta"), "expected CPM goal label in:\n{rendered}");
+        let expected_cpm = format!("{:.0}", Tier::Tier1Foundation.min_cpm());
+        assert!(rendered.contains(&expected_cpm), "expected Tier1 min CPM ({expected_cpm}) in:\n{rendered}");
+        assert!(rendered.contains("DESTINO ACTUAL"), "expected current-tier badge in:\n{rendered}");
+        assert!(rendered.contains("SIN EXPLORAR"), "expected unexplored badge in:\n{rendered}");
+    }
+
+    #[test]
     fn test_100x34_shows_cimientos_and_sin_explorar_badges() {
         let mut app = App::new();
         // Deterministic progress: Tier1 unlocked, nothing completed yet, so

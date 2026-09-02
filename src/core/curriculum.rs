@@ -2541,6 +2541,23 @@ mod tests {
     }
 
     #[test]
+    fn test_fresh_install_all_but_first_unexplored() {
+        let progress = UserProgress::default();
+        let all = Curriculum::all_tier_progress(&progress);
+
+        assert_eq!(all[0].status, PlanetStatus::Current, "Tier1 must be the current frontier");
+        assert_eq!(all[0].passed, 0, "no lesson has been passed on a fresh install");
+        for tp in &all[1..] {
+            assert_eq!(
+                tp.status,
+                PlanetStatus::Unexplored,
+                "tier {:?} must be Unexplored on a fresh install",
+                tp.tier
+            );
+        }
+    }
+
+    #[test]
     fn test_curriculum_contains_all_tiers() {
         let all = Curriculum::all_lessons();
         assert!(!all.is_empty());

@@ -481,7 +481,7 @@ impl Default for App {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::model::{BestScore, Tier};
+    use crate::core::model::{BestScore, PlanetStatus, Tier};
 
     #[test]
     fn test_enter_planet_lessons_matches_selected_tier() {
@@ -546,6 +546,44 @@ mod tests {
 
         let selected = app.selected_lesson().expect("a lesson must be selected");
         assert_eq!(selected.id, tier1_lessons[0].id);
+    }
+
+    #[test]
+    fn test_all_conquered_planet_seven_still_enterable() {
+        let mut app = App::new();
+        let mut progress = UserProgress::default();
+        progress.unlocked_tier = Tier::Tier7GrandMaster;
+        for lesson in Curriculum::all_lessons() {
+            progress.completed_lessons.insert(
+                lesson.id.clone(),
+                BestScore {
+                    cpm: 999.0,
+                    accuracy: 100.0,
+                    completed_at: 0,
+                    passed: true,
+                },
+            );
+        }
+        app.user_progress = progress;
+
+        let all_progress = Curriculum::all_tier_progress(&app.user_progress);
+        for tp in &all_progress {
+            assert_eq!(
+                tp.status,
+                PlanetStatus::Conquered,
+                "tier {:?} must be Conquered once every lesson is passed",
+                tp.tier
+            );
+        }
+
+        app.selected_planet_index = Tier::Tier7GrandMaster.index();
+        app.enter_planet_lessons();
+
+        assert_eq!(app.current_view, CurrentView::PlanetLessons);
+        let selected = app
+            .selected_lesson()
+            .expect("Tier7 must still be enterable after full conquest");
+        assert_eq!(selected.tier, Tier::Tier7GrandMaster);
     }
 
     #[test]
