@@ -11,7 +11,6 @@ pub use engine::{EngineStatus, TypingEngine};
 pub use feedback::FeedbackCoach;
 pub use metrics::MetricsCalculator;
 pub use model::{
-    BestScore, KeyStat, KeyStroke, Lesson, Section, SessionMetrics, Tier, UserProgress,
+    BestScore, KeyStat, KeyStroke, Lesson, PlanetStatus, Section, SessionMetrics, Tier,
+    TierProgress, UserProgress,
 };
-
-

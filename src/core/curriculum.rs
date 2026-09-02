@@ -1,4 +1,4 @@
-use crate::core::model::{Lesson, Section, Tier};
+use crate::core::model::{Lesson, PlanetStatus, Section, Tier, TierProgress, UserProgress};
 use rand::seq::SliceRandom;
 use rand::thread_rng;
 
@@ -176,6 +176,39 @@ impl Curriculum {
 
     pub fn find_lesson(id: &str) -> Option<Lesson> {
         Self::all_lessons().into_iter().find(|l| l.id == id)
+    }
+
+    /// Aggregates lesson counters and derived planet status for a tier.
+    pub fn tier_progress(tier: Tier, progress: &UserProgress) -> TierProgress {
+        let lessons = Self::lessons_for_tier(tier);
+        let total = lessons.len();
+        let attempted = lessons
+            .iter()
+            .filter(|lesson| progress.completed_lessons.contains_key(&lesson.id))
+            .count();
+        let passed = lessons
+            .iter()
+            .filter(|lesson| {
+                progress
+                    .completed_lessons
+                    .get(&lesson.id)
+                    .is_some_and(|score| score.passed)
+            })
+            .count();
+        let status = PlanetStatus::derive(tier, progress.unlocked_tier, total, attempted, passed);
+
+        TierProgress {
+            tier,
+            total,
+            attempted,
+            passed,
+            status,
+        }
+    }
+
+    /// Returns [`TierProgress`] for every tier, in tier order.
+    pub fn all_tier_progress(progress: &UserProgress) -> [TierProgress; 7] {
+        Tier::ALL.map(|tier| Self::tier_progress(tier, progress))
     }
 
     fn tier1_lessons() -> Vec<Lesson> {
@@ -2450,6 +2483,62 @@ impl Curriculum {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::model::{BestScore, PlanetStatus, UserProgress};
+    use std::collections::HashMap;
+
+    #[test]
+    fn test_tier_progress_counts_total_attempted_passed() {
+        let mut completed_lessons = HashMap::new();
+        completed_lessons.insert(
+            "t1-l1".to_string(),
+            BestScore {
+                cpm: 60.0,
+                accuracy: 98.0,
+                completed_at: 0,
+                passed: true,
+            },
+        );
+        completed_lessons.insert(
+            "t1-l2".to_string(),
+            BestScore {
+                cpm: 30.0,
+                accuracy: 90.0,
+                completed_at: 0,
+                passed: false,
+            },
+        );
+
+        let progress = UserProgress {
+            completed_lessons,
+            unlocked_tier: Tier::Tier1Foundation,
+            total_practice_seconds: 0,
+            key_stats: HashMap::new(),
+        };
+
+        let tier_progress = Curriculum::tier_progress(Tier::Tier1Foundation, &progress);
+
+        assert_eq!(tier_progress.tier, Tier::Tier1Foundation);
+        assert_eq!(
+            tier_progress.total,
+            Curriculum::lessons_for_tier(Tier::Tier1Foundation).len()
+        );
+        assert_eq!(tier_progress.attempted, 2);
+        assert_eq!(tier_progress.passed, 1);
+        assert_eq!(tier_progress.status, PlanetStatus::Current);
+    }
+
+    #[test]
+    fn test_all_tier_progress_returns_seven_ordered() {
+        let progress = UserProgress::default();
+        let all = Curriculum::all_tier_progress(&progress);
+
+        assert_eq!(all.len(), 7);
+        for (i, tp) in all.iter().enumerate() {
+            assert_eq!(tp.tier, Tier::ALL[i]);
+            assert_eq!(tp.total, Curriculum::lessons_for_tier(Tier::ALL[i]).len());
+        }
+        assert_eq!(all[0].status, PlanetStatus::Current);
+    }
 
     #[test]
     fn test_curriculum_contains_all_tiers() {
