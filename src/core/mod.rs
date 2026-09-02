@@ -10,6 +10,8 @@ pub use dictation::{DictationConfig, DictationEngine, DictationMetrics};
 pub use engine::{EngineStatus, TypingEngine};
 pub use feedback::FeedbackCoach;
 pub use metrics::MetricsCalculator;
-pub use model::{BestScore, KeyStat, KeyStroke, Lesson, SessionMetrics, Tier, UserProgress};
+pub use model::{
+    BestScore, KeyStat, KeyStroke, Lesson, Section, SessionMetrics, Tier, UserProgress,
+};
 
 

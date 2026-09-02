@@ -1,4 +1,5 @@
 use crate::core::model::Tier;
+use crate::core::Curriculum;
 use crate::tui::app::{App, CurrentView};
 use crate::tui::ascii::AsciiArt;
 use crate::tui::components::{
@@ -80,47 +81,86 @@ fn render_main_menu(f: &mut Frame, app: &App) {
         .split(chunks[1]);
 
     let lessons = app.available_lessons();
+    let sections = Curriculum::all_sections();
     let visible_capacity = (body_chunks[0].height.saturating_sub(2)).max(1) as usize;
     let selected = app.selected_lesson_index;
 
-    // Viewport window calculation for smooth scrolling
-    let start_idx = if selected >= visible_capacity {
-        selected + 1 - visible_capacity
+    // One display row per lesson, plus a non-selectable header row whenever
+    // the curriculum section changes. Selection stays lesson-based.
+    enum MenuRow<'a> {
+        Header(&'a str),
+        Lesson(usize),
+    }
+
+    let mut display_rows: Vec<MenuRow<'_>> = Vec::with_capacity(lessons.len() + sections.len());
+    let mut current_section: Option<&str> = None;
+    for (idx, lesson) in lessons.iter().enumerate() {
+        if current_section != Some(lesson.section_id.as_str()) {
+            let title = sections
+                .iter()
+                .find(|s| s.id == lesson.section_id)
+                .map(|s| s.title.as_str())
+                .unwrap_or(lesson.section_id.as_str());
+            display_rows.push(MenuRow::Header(title));
+            current_section = Some(lesson.section_id.as_str());
+        }
+        display_rows.push(MenuRow::Lesson(idx));
+    }
+
+    let selected_display_idx = display_rows
+        .iter()
+        .position(|row| matches!(row, MenuRow::Lesson(idx) if *idx == selected))
+        .unwrap_or(0);
+
+    // Viewport window calculated over DISPLAY rows (lessons + section headers)
+    let start_idx = if selected_display_idx >= visible_capacity {
+        selected_display_idx + 1 - visible_capacity
     } else {
         0
     };
 
     let mut list_items = Vec::new();
 
-    for (idx, lesson) in lessons.iter().enumerate().skip(start_idx).take(visible_capacity) {
-        let is_selected = idx == app.selected_lesson_index;
-        let score = app.user_progress.completed_lessons.get(&lesson.id);
+    for row in display_rows.iter().skip(start_idx).take(visible_capacity) {
+        match row {
+            MenuRow::Header(title) => {
+                list_items.push(ListItem::new(Line::from(Span::styled(
+                    format!("  ── SECCIÓN: {} ──", title),
+                    Style::default().fg(Theme::SECONDARY).add_modifier(Modifier::BOLD),
+                ))));
+            }
+            MenuRow::Lesson(idx) => {
+                let lesson = &lessons[*idx];
+                let is_selected = *idx == selected;
+                let score = app.user_progress.completed_lessons.get(&lesson.id);
 
-        let status_badge = match score {
-            Some(s) if s.passed => Span::styled(" [🚀 DESPEJADO] ", Style::default().fg(Theme::SUCCESS).add_modifier(Modifier::BOLD)),
-            Some(_) => Span::styled(" [⚠ ALERTA]    ", Style::default().fg(Theme::ERROR).add_modifier(Modifier::BOLD)),
-            None => Span::styled(" [✦ INEXPLORADO]", Style::default().fg(Theme::MUTED)),
-        };
+                let status_badge = match score {
+                    Some(s) if s.passed => Span::styled(" [🚀 DESPEJADO] ", Style::default().fg(Theme::SUCCESS).add_modifier(Modifier::BOLD)),
+                    Some(_) => Span::styled(" [⚠ ALERTA]    ", Style::default().fg(Theme::ERROR).add_modifier(Modifier::BOLD)),
+                    None => Span::styled(" [✦ INEXPLORADO]", Style::default().fg(Theme::MUTED)),
+                };
 
-        let best_stat = if let Some(s) = score {
-            format!("({:.0} CPM · {:.1}%)", s.cpm, s.accuracy)
-        } else {
-            format!("(Meta: {:.0} CPM)", lesson.target_cpm)
-        };
+                let best_stat = if let Some(s) = score {
+                    format!("({:.0} CPM · {:.1}%)", s.cpm, s.accuracy)
+                } else {
+                    format!("(Meta: {:.0} CPM)", lesson.target_cpm)
+                };
 
-        let prefix = if is_selected { " ▶ " } else { "   " };
-        let item_style = if is_selected {
-            Style::default().fg(Theme::PRIMARY).add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(Theme::TEXT)
-        };
+                let prefix = if is_selected { " ▶ " } else { "   " };
+                let item_style = if is_selected {
+                    Style::default().fg(Theme::PRIMARY).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Theme::TEXT)
+                };
 
-        list_items.push(ListItem::new(Line::from(vec![
-            Span::styled(prefix, item_style),
-            status_badge,
-            Span::styled(format!(" {:<44} ", lesson.title), item_style),
-            Span::styled(best_stat, Style::default().fg(Theme::ACCENT)),
-        ])));
+                list_items.push(ListItem::new(Line::from(vec![
+                    Span::styled(prefix, item_style),
+                    status_badge,
+                    Span::styled(format!(" {:<44} ", lesson.title), item_style),
+                    Span::styled(best_stat, Style::default().fg(Theme::ACCENT)),
+                ])));
+            }
+        }
     }
 
     let menu_title = format!(
@@ -133,8 +173,8 @@ fn render_main_menu(f: &mut Frame, app: &App) {
         .block(Theme::retro_block(&menu_title, Theme::PRIMARY));
     f.render_widget(lessons_list, body_chunks[0]);
 
-    // Render retro vertical scrollbar
-    let mut scrollbar_state = ScrollbarState::new(lessons.len()).position(selected);
+    // Render retro vertical scrollbar over total display rows
+    let mut scrollbar_state = ScrollbarState::new(display_rows.len()).position(selected_display_idx);
     let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
         .begin_symbol(Some("▲"))
         .end_symbol(Some("▼"))

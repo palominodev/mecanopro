@@ -82,11 +82,22 @@ impl Default for SessionMetrics {
     }
 }
 
+/// Ordered curriculum section grouping lessons (e.g. "FILA GUÍA").
+/// Persisted nowhere on its own: user progress stores lesson ids only.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Section {
+    pub id: String,
+    pub title: String,
+    pub tier: Tier,
+    pub description: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Lesson {
     pub id: String,
     pub title: String,
     pub tier: Tier,
+    pub section_id: String,
     pub description: String,
     pub text: String,
     pub target_cpm: f64,

@@ -153,6 +153,7 @@ mod tests {
             id: "test-1".into(),
             title: "Test Lesson".into(),
             tier: Tier::Tier1Foundation,
+            section_id: "test-section".into(),
             description: "Test".into(),
             text: text.into(),
             target_cpm: 50.0,
