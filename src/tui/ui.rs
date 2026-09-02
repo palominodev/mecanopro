@@ -1,14 +1,14 @@
-use crate::core::model::{PlanetStatus, Tier};
+use crate::core::model::{Lesson, PlanetStatus, Tier};
 use crate::core::Curriculum;
 use crate::tui::app::{App, CurrentView};
 use crate::tui::ascii::AsciiArt;
 use crate::tui::components::{
     DictationArea, DictationSummaryModal, KeyboardVisualizer, StatsBar, SummaryModal, TypingArea,
 };
-use crate::tui::planet_layout::{map_mode, planet_layout, MapMode};
+use crate::tui::planet_layout::{build_rows, display_index_of, map_mode, planet_layout, viewport_start, MapMode, MenuRow};
 use crate::tui::theme::Theme;
 use ratatui::{
-    layout::{Alignment, Constraint, Direction, Layout},
+    layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, BorderType, Borders, Paragraph, Wrap},
@@ -38,8 +38,7 @@ pub fn render(f: &mut Frame, app: &App) {
             }
         }
         CurrentView::Stats => render_stats(f, app),
-        // replaced by render_planet_lessons in PR5
-        CurrentView::PlanetLessons => render_main_menu(f, app),
+        CurrentView::PlanetLessons => render_planet_lessons(f, app),
         CurrentView::Dictation => render_dictation(f, app),
         CurrentView::DictationSummary => {
             render_dictation(f, app);
@@ -55,17 +54,9 @@ pub fn render(f: &mut Frame, app: &App) {
     }
 }
 
-fn render_main_menu(f: &mut Frame, app: &App) {
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(6),  // Retro ASCII Header
-            Constraint::Min(12),   // Body (Sectors & Telemetry)
-            Constraint::Length(3),  // Retro Footer
-        ])
-        .split(f.area());
-
-    // 1. Retro ASCII Header Banner
+/// Retro ASCII header banner shared by [`render_main_menu`] and
+/// [`render_planet_lessons`].
+fn render_header(f: &mut Frame, area: Rect) {
     let header_lines = vec![
         Line::from(Span::styled(
             AsciiArt::LOGO_LINES[0],
@@ -87,7 +78,20 @@ fn render_main_menu(f: &mut Frame, app: &App) {
     let header = Paragraph::new(header_lines)
         .block(Theme::retro_block("COMANDO CENTRAL :: MECANOPRO", Theme::PRIMARY))
         .alignment(Alignment::Center);
-    f.render_widget(header, chunks[0]);
+    f.render_widget(header, area);
+}
+
+fn render_main_menu(f: &mut Frame, app: &App) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(6),  // Retro ASCII Header
+            Constraint::Min(12),   // Body (Sectors & Telemetry)
+            Constraint::Length(3),  // Retro Footer
+        ])
+        .split(f.area());
+
+    render_header(f, chunks[0]);
 
     // 2. Body: Left = Sectors List, Right = Pilot Telemetry & Stats
     let body_chunks = Layout::default()
@@ -222,6 +226,121 @@ fn render_main_menu(f: &mut Frame, app: &App) {
         Span::styled("Telemetría  ", Style::default().fg(Theme::TEXT)),
         Span::styled("[Q] ", Style::default().fg(Theme::MUTED).add_modifier(Modifier::BOLD)),
         Span::styled("Salir", Style::default().fg(Theme::TEXT)),
+    ];
+    let footer = Paragraph::new(Line::from(footer_spans))
+        .block(Theme::retro_block("MANDOS DE LA NAVE", Theme::MUTED))
+        .alignment(Alignment::Center);
+    f.render_widget(footer, chunks[2]);
+}
+
+/// Styled [`Line`] for one row of the planet lesson list. Headers render
+/// dimmed/bold; lesson rows show a selection marker, a passed badge, the
+/// title and target CPM.
+fn menu_row_line(row: &MenuRow, app: &App, lessons: &[Lesson]) -> Line<'static> {
+    match row {
+        MenuRow::Header(title) => Line::from(Span::styled(
+            title.clone(),
+            Style::default().fg(Theme::SECONDARY).add_modifier(Modifier::BOLD),
+        )),
+        MenuRow::Lesson(flat_idx) => {
+            let lesson = &lessons[*flat_idx];
+            let passed = app
+                .user_progress
+                .completed_lessons
+                .get(&lesson.id)
+                .map(|score| score.passed)
+                .unwrap_or(false);
+            let is_selected = *flat_idx == app.selected_lesson_index;
+
+            let marker = if is_selected { "▶ " } else { "  " };
+            let badge = if passed { "✔ " } else { "  " };
+            let style = if is_selected {
+                Style::default().fg(Theme::PRIMARY).add_modifier(Modifier::BOLD)
+            } else if passed {
+                Style::default().fg(Theme::SUCCESS)
+            } else {
+                Style::default().fg(Theme::TEXT)
+            };
+
+            let text = format!("{marker}{badge}{} · {:.0} CPM", lesson.title, lesson.target_cpm);
+            Line::from(Span::styled(text, style))
+        }
+    }
+}
+
+fn render_planet_lessons(f: &mut Frame, app: &App) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(6), Constraint::Min(12), Constraint::Length(3)])
+        .split(f.area());
+
+    render_header(f, chunks[0]);
+
+    let body_chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(62), Constraint::Percentage(38)])
+        .split(chunks[1]);
+
+    // Left panel: section-grouped lesson list for the selected tier.
+    let tier = app.selected_tier();
+    let lessons = app.available_lessons();
+    let tier_lessons: Vec<(usize, &Lesson)> = lessons
+        .iter()
+        .enumerate()
+        .filter(|(_, lesson)| lesson.tier == tier)
+        .collect();
+    let sections = Curriculum::all_sections();
+    let rows = build_rows(&tier_lessons, &sections);
+
+    let list_title = format!(" ◎ {} :: SECTORES ", tier.planet_name());
+    let list_block = Theme::retro_block(&list_title, Theme::PRIMARY);
+    let inner = list_block.inner(body_chunks[0]);
+    f.render_widget(list_block, body_chunks[0]);
+
+    if inner.height > 0 {
+        let capacity = inner.height as usize;
+        let selected_display = display_index_of(&rows, app.selected_lesson_index).unwrap_or(0);
+        let start = viewport_start(selected_display, capacity);
+
+        let lines: Vec<Line> = rows
+            .iter()
+            .skip(start)
+            .take(capacity)
+            .map(|row| menu_row_line(row, app, &lessons))
+            .collect();
+        f.render_widget(Paragraph::new(lines), inner);
+    }
+
+    // Right panel: compact tier telemetry.
+    let tier_progress = Curriculum::all_tier_progress(&app.user_progress);
+    let tp = &tier_progress[tier.index()];
+    let sidebar_lines = vec![
+        Line::from(Span::styled(tier.name(), Style::default().fg(Theme::ACCENT).add_modifier(Modifier::BOLD))),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("Sectores conquistados: ", Style::default().fg(Theme::MUTED)),
+            Span::styled(format!("{}/{}", tp.passed, tp.total), Style::default().fg(Theme::SUCCESS).add_modifier(Modifier::BOLD)),
+        ]),
+        Line::from(vec![
+            Span::styled("Velocidad mínima: ", Style::default().fg(Theme::MUTED)),
+            Span::styled(format!("{:.0} CPM", tier.min_cpm()), Style::default().fg(Theme::TEXT)),
+        ]),
+    ];
+    let sidebar = Paragraph::new(sidebar_lines)
+        .block(Theme::retro_block("✦ TELEMETRÍA DEL SECTOR ✦", Theme::NEBULA_PURPLE))
+        .wrap(Wrap { trim: true });
+    f.render_widget(sidebar, body_chunks[1]);
+
+    // Footer keybinds.
+    let footer_spans = vec![
+        Span::styled("[↑/↓ j/k] ", Style::default().fg(Theme::PRIMARY).add_modifier(Modifier::BOLD)),
+        Span::styled("Lección  ", Style::default().fg(Theme::TEXT)),
+        Span::styled("[ENTER] ", Style::default().fg(Theme::SUCCESS).add_modifier(Modifier::BOLD)),
+        Span::styled("Practicar  ", Style::default().fg(Theme::TEXT)),
+        Span::styled("[ESC/←] ", Style::default().fg(Theme::SECONDARY).add_modifier(Modifier::BOLD)),
+        Span::styled("Volver al mapa  ", Style::default().fg(Theme::TEXT)),
+        Span::styled("[Q] ", Style::default().fg(Theme::MUTED).add_modifier(Modifier::BOLD)),
+        Span::styled("Volver", Style::default().fg(Theme::TEXT)),
     ];
     let footer = Paragraph::new(Line::from(footer_spans))
         .block(Theme::retro_block("MANDOS DE LA NAVE", Theme::MUTED))
@@ -452,5 +571,61 @@ mod tests {
         assert_eq!(planet_style(PlanetStatus::Current), ("◎", Theme::PRIMARY, "DESTINO ACTUAL"));
         assert_eq!(planet_style(PlanetStatus::InProgress), ("◍", Theme::ACCENT, "EN CURSO"));
         assert_eq!(planet_style(PlanetStatus::Unexplored), ("○", Theme::MUTED, "SIN EXPLORAR"));
+    }
+
+    #[test]
+    fn test_planet_lessons_view_lists_only_selected_tier() {
+        let mut app = App::new();
+        app.user_progress = UserProgress::default();
+        app.selected_planet_index = Tier::Tier1Foundation.index();
+        app.enter_planet_lessons();
+
+        let tier1_title = app
+            .available_lessons()
+            .into_iter()
+            .find(|l| l.tier == Tier::Tier1Foundation)
+            .expect("fixture needs a Tier1 lesson")
+            .title;
+        let tier2_title = app
+            .available_lessons()
+            .into_iter()
+            .find(|l| l.tier == Tier::Tier2FullAlphabet)
+            .expect("fixture needs a Tier2 lesson")
+            .title;
+
+        let rendered = render_to_string(&app, 100, 34);
+
+        assert!(rendered.contains(&tier1_title), "expected Tier1 lesson '{tier1_title}' in:\n{rendered}");
+        assert!(rendered.contains(Tier::Tier1Foundation.planet_name()), "expected Tier1 planet name in:\n{rendered}");
+        assert!(!rendered.contains(&tier2_title), "must not list Tier2 lesson '{tier2_title}' while on Tier1:\n{rendered}");
+    }
+
+    #[test]
+    fn test_planet_lessons_view_1x1_no_panic() {
+        let mut app = App::new();
+        app.user_progress = UserProgress::default();
+        app.selected_planet_index = Tier::Tier1Foundation.index();
+        app.enter_planet_lessons();
+
+        let rendered = render_to_string(&app, 1, 1);
+        assert_eq!(rendered.chars().count(), 1);
+    }
+
+    #[test]
+    fn test_planet_lessons_view_shows_section_header() {
+        let mut app = App::new();
+        app.user_progress = UserProgress::default();
+        app.selected_planet_index = Tier::Tier1Foundation.index();
+        app.enter_planet_lessons();
+
+        let section_title = Curriculum::all_sections()
+            .into_iter()
+            .find(|s| s.tier == Tier::Tier1Foundation)
+            .expect("fixture needs a Tier1 section")
+            .title;
+
+        let rendered = render_to_string(&app, 100, 34);
+
+        assert!(rendered.contains(&section_title), "expected section header '{section_title}' in:\n{rendered}");
     }
 }
