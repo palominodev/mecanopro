@@ -88,6 +88,9 @@ impl EventHandler {
                 KeyCode::Esc | KeyCode::Char('m') | KeyCode::Char('M') => app.current_view = CurrentView::MainMenu,
                 _ => {}
             },
+
+            // wired in PR5: planet lessons list navigation and drill-down
+            CurrentView::PlanetLessons => {}
         }
     }
 }

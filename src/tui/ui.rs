@@ -38,6 +38,8 @@ pub fn render(f: &mut Frame, app: &App) {
             }
         }
         CurrentView::Stats => render_stats(f, app),
+        // replaced by render_planet_lessons in PR5
+        CurrentView::PlanetLessons => render_main_menu(f, app),
         CurrentView::Dictation => render_dictation(f, app),
         CurrentView::DictationSummary => {
             render_dictation(f, app);
