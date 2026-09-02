@@ -1,3 +1,4 @@
+pub mod animation;
 pub mod app;
 pub mod ascii;
 pub mod components;

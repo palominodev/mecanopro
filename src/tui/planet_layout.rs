@@ -103,9 +103,9 @@ fn center_y(rect: Rect) -> f32 {
     rect.y as f32 + rect.height as f32 / 2.0
 }
 
-/// Ship sprite placement stub (finalized in PR6). Interpolates the sprite's
+/// Computes the ship sprite's placement inside `gutter`, interpolating its
 /// vertical center between the cards straddling `pos` (a fractional planet
-/// index) and clamps the result inside `gutter`.
+/// index) and clamping the result to fit.
 pub fn ship_rect(gutter: Rect, cards: &[Rect], pos: f32, sprite_h: u16) -> Rect {
     if cards.is_empty() || gutter.width == 0 || gutter.height == 0 {
         return Rect::new(gutter.x, gutter.y, 0, 0);
@@ -447,5 +447,30 @@ mod tests {
         let empty_cards: Vec<Rect> = Vec::new();
         let rect = ship_rect(gutter, &empty_cards, 0.0, sprite_h);
         assert_eq!(rect.width * rect.height, 0);
+    }
+
+    #[test]
+    fn test_ship_rect_matches_card_centres() {
+        let area = Rect::new(0, 0, 120, 40);
+        let gutter = ship_gutter(area);
+        let cards = planet_layout(area);
+        let sprite_h = 3u16;
+        let in_gutter = |r: Rect| r.y >= gutter.y && r.y + r.height <= gutter.y + gutter.height;
+
+        for (pos, card_idx) in [(0.0f32, 0), (6.0, 6)] {
+            let rect = ship_rect(gutter, &cards, pos, sprite_h);
+            let card_center = center_y(cards[card_idx]) as u16;
+            assert_eq!(rect.y + rect.height / 2, card_center, "pos {pos}");
+            assert!(in_gutter(rect), "rect={rect:?} gutter={gutter:?}");
+        }
+
+        let rect_half = ship_rect(gutter, &cards, 0.5, sprite_h);
+        let mid = (center_y(cards[0]) + center_y(cards[1])) / 2.0;
+        let half_center = rect_half.y as f32 + rect_half.height as f32 / 2.0;
+        assert!(
+            (half_center - mid).abs() <= 1.0,
+            "pos 0.5 within 1 cell of the card 0/1 midpoint"
+        );
+        assert!(in_gutter(rect_half), "rect={rect_half:?} gutter={gutter:?}");
     }
 }
