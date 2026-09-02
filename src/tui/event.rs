@@ -1,6 +1,10 @@
 use crate::tui::app::{App, CurrentView};
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
-use ratatui::layout::Rect;
+use crate::tui::planet_layout::{display_index_of, lesson_row_at, planet_at, viewport_start};
+use crate::tui::ui::{lesson_list_area, map_body_area};
+use crossterm::event::{
+    self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+};
+use ratatui::layout::{Position, Rect};
 use std::io;
 
 /// Row count moved by `PageUp`/`PageDown`/`Ctrl+b`/`Ctrl+f`/`Ctrl+u`/`Ctrl+d`
@@ -10,16 +14,79 @@ const PAGE_SIZE: usize = 10;
 pub struct EventHandler;
 
 impl EventHandler {
-    pub fn handle_event(app: &mut App, _area: Rect) -> io::Result<()> {
+    pub fn handle_event(app: &mut App, area: Rect) -> io::Result<()> {
         if event::poll(app.poll_interval())? {
             match event::read()? {
                 Event::Key(key) if key.kind == KeyEventKind::Press => {
                     Self::handle_key(app, key);
                 }
+                Event::Mouse(mouse) => Self::handle_mouse(app, mouse, area)?,
                 _ => {}
             }
         }
         Ok(())
+    }
+
+    /// Handles a mouse event against the last known frame `area`. Like
+    /// [`Self::handle_key`], any in-flight ship animation is snapped to its
+    /// destination first so the event never has to wait for it.
+    fn handle_mouse(app: &mut App, m: MouseEvent, area: Rect) -> io::Result<()> {
+        if !app.ship.is_idle() {
+            app.ship.complete();
+        }
+
+        if let MouseEventKind::Down(MouseButton::Left) = m.kind {
+            let pos = Position::new(m.column, m.row);
+            match app.current_view {
+                CurrentView::MainMenu => {
+                    if let Some(i) = planet_at(map_body_area(area), pos) {
+                        app.selected_planet_index = i;
+                        app.ship.snap_to(i);
+                        app.enter_planet_lessons();
+                    }
+                }
+                CurrentView::PlanetLessons => Self::handle_lesson_row_click(app, area, m.row),
+                _ => {}
+            }
+        }
+
+        match m.kind {
+            MouseEventKind::ScrollUp => match app.current_view {
+                CurrentView::MainMenu => app.move_planet_up(),
+                CurrentView::PlanetLessons => app.move_selection_up(),
+                _ => {}
+            },
+            MouseEventKind::ScrollDown => match app.current_view {
+                CurrentView::MainMenu => app.move_planet_down(),
+                CurrentView::PlanetLessons => app.move_selection_down(),
+                _ => {}
+            },
+            _ => {}
+        }
+
+        Ok(())
+    }
+
+    /// Resolves a click at terminal `row` against the lesson list, using the
+    /// same [`App::current_tier_rows`] and viewport math as the renderer.
+    /// Clicking the already-selected row starts practice; any other lesson
+    /// row just moves the selection. Headers/borders/outside are a no-op.
+    fn handle_lesson_row_click(app: &mut App, area: Rect, row: u16) {
+        let rows = app.current_tier_rows();
+        let list_area = lesson_list_area(area);
+        let capacity = list_area.height.saturating_sub(2) as usize;
+        let selected_display = display_index_of(&rows, app.selected_lesson_index).unwrap_or(0);
+        let start = viewport_start(selected_display, capacity);
+
+        if let Some(flat) = lesson_row_at(list_area, start, &rows, row) {
+            if flat == app.selected_lesson_index {
+                if let Some(lesson) = app.selected_lesson() {
+                    app.start_practice(lesson);
+                }
+            } else {
+                app.selected_lesson_index = flat;
+            }
+        }
     }
 
     fn handle_key(app: &mut App, key: KeyEvent) {
@@ -133,10 +200,178 @@ impl EventHandler {
 mod tests {
     use super::*;
     use crate::tui::app::App;
+    use crate::tui::planet_layout::{planet_layout, MenuRow};
     use crate::core::model::{Tier, UserProgress};
 
     fn key(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    fn mouse(kind: MouseEventKind, pos: Position) -> MouseEvent {
+        MouseEvent {
+            kind,
+            column: pos.x,
+            row: pos.y,
+            modifiers: KeyModifiers::NONE,
+        }
+    }
+
+    fn left_click(pos: Position) -> MouseEvent {
+        mouse(MouseEventKind::Down(MouseButton::Left), pos)
+    }
+
+    #[test]
+    fn test_left_click_on_planet_card_selects_and_opens_planetlessons() {
+        let mut app = App::new();
+        app.user_progress = UserProgress::default();
+        let area = Rect::new(0, 0, 120, 40);
+        let cards = planet_layout(map_body_area(area));
+        let card = cards[3];
+        let pos = Position::new(card.x + card.width / 2, card.y + card.height / 2);
+
+        EventHandler::handle_mouse(&mut app, left_click(pos), area).unwrap();
+
+        assert_eq!(app.selected_planet_index, 3);
+        assert_eq!(app.current_view, CurrentView::PlanetLessons);
+    }
+
+    #[test]
+    fn test_left_click_outside_ignored() {
+        let mut app = App::new();
+        app.user_progress = UserProgress::default();
+        app.selected_planet_index = Tier::Tier2FullAlphabet.index();
+        let area = Rect::new(0, 0, 120, 40);
+
+        EventHandler::handle_mouse(&mut app, left_click(Position::new(0, 0)), area).unwrap();
+
+        assert_eq!(app.current_view, CurrentView::MainMenu);
+        assert_eq!(app.selected_planet_index, Tier::Tier2FullAlphabet.index());
+    }
+
+    #[test]
+    fn test_left_click_on_lesson_row_selects() {
+        let mut app = App::new();
+        app.user_progress = UserProgress::default();
+        app.selected_planet_index = Tier::Tier1Foundation.index();
+        app.enter_planet_lessons();
+        let area = Rect::new(0, 0, 120, 40);
+        let list_area = lesson_list_area(area);
+        let rows = app.current_tier_rows();
+        // Second `MenuRow::Lesson` row: the tier's first section starts with
+        // a header, so display row 2 is the second lesson (row 1 is the
+        // first lesson right after the header at row 0).
+        let flat = match rows[2] {
+            MenuRow::Lesson(idx) => idx,
+            _ => panic!("expected rows[2] to be a Lesson row: {:?}", rows[2]),
+        };
+        let row_y = list_area.y + 1 + 2; // inner_top + display index
+
+        EventHandler::handle_mouse(&mut app, left_click(Position::new(list_area.x + 2, row_y)), area).unwrap();
+
+        assert_eq!(app.selected_lesson_index, flat);
+        assert_eq!(app.current_view, CurrentView::PlanetLessons);
+    }
+
+    #[test]
+    fn test_left_click_on_already_selected_row_starts_practice() {
+        let mut app = App::new();
+        app.user_progress = UserProgress::default();
+        app.selected_planet_index = Tier::Tier1Foundation.index();
+        app.enter_planet_lessons();
+        let area = Rect::new(0, 0, 120, 40);
+        let list_area = lesson_list_area(area);
+        let rows = app.current_tier_rows();
+        let selected_display =
+            display_index_of(&rows, app.selected_lesson_index).expect("selected lesson must be a row");
+        let row_y = list_area.y + 1 + selected_display as u16;
+
+        EventHandler::handle_mouse(&mut app, left_click(Position::new(list_area.x + 2, row_y)), area).unwrap();
+
+        assert_eq!(app.current_view, CurrentView::Practice);
+    }
+
+    #[test]
+    fn test_click_during_animation_completes_it_first() {
+        let mut app = App::new();
+        app.user_progress = UserProgress::default();
+        app.selected_planet_index = 0;
+        app.move_planet_down();
+        assert_eq!(app.ship.phase(), crate::tui::animation::ShipPhase::Traveling);
+
+        let area = Rect::new(0, 0, 120, 40);
+        let cards = planet_layout(map_body_area(area));
+        let card = cards[3];
+        let pos = Position::new(card.x + card.width / 2, card.y + card.height / 2);
+        EventHandler::handle_mouse(&mut app, left_click(pos), area).unwrap();
+
+        assert_ne!(app.ship.phase(), crate::tui::animation::ShipPhase::Traveling);
+        assert!((app.ship.position() - 3.0).abs() < 1e-5);
+        assert_eq!(app.current_view, CurrentView::PlanetLessons);
+    }
+
+    #[test]
+    fn test_non_click_mouse_kinds_ignored() {
+        let area = Rect::new(0, 0, 120, 40);
+        let cards = planet_layout(map_body_area(area));
+        let card = cards[3];
+        let pos = Position::new(card.x + card.width / 2, card.y + card.height / 2);
+
+        for kind in [
+            MouseEventKind::Moved,
+            MouseEventKind::Drag(MouseButton::Left),
+            MouseEventKind::Up(MouseButton::Left),
+            MouseEventKind::Down(MouseButton::Right),
+        ] {
+            let mut app = App::new();
+            app.user_progress = UserProgress::default();
+            app.selected_planet_index = Tier::Tier2FullAlphabet.index();
+
+            EventHandler::handle_mouse(&mut app, mouse(kind, pos), area).unwrap();
+
+            assert_eq!(app.current_view, CurrentView::MainMenu, "kind {kind:?} must not change view");
+            assert_eq!(
+                app.selected_planet_index,
+                Tier::Tier2FullAlphabet.index(),
+                "kind {kind:?} must not change selection"
+            );
+        }
+    }
+
+    #[test]
+    fn test_scroll_moves_selection_both_views() {
+        let area = Rect::new(0, 0, 120, 40);
+
+        let mut app = App::new();
+        app.user_progress = UserProgress::default();
+        app.selected_planet_index = Tier::Tier2FullAlphabet.index();
+        EventHandler::handle_mouse(&mut app, mouse(MouseEventKind::ScrollDown, Position::new(0, 0)), area).unwrap();
+        assert_eq!(app.selected_planet_index, Tier::Tier3SpanishOrthography.index());
+
+        let mut app = App::new();
+        app.user_progress = UserProgress::default();
+        app.selected_planet_index = Tier::Tier1Foundation.index();
+        app.enter_planet_lessons();
+        app.move_selection_down();
+        let before = app.selected_lesson_index;
+        EventHandler::handle_mouse(&mut app, mouse(MouseEventKind::ScrollUp, Position::new(0, 0)), area).unwrap();
+        assert_eq!(app.selected_lesson_index, before - 1);
+    }
+
+    #[test]
+    fn test_left_click_on_header_row_noop() {
+        let mut app = App::new();
+        app.user_progress = UserProgress::default();
+        app.selected_planet_index = Tier::Tier1Foundation.index();
+        app.enter_planet_lessons();
+        let before_lesson = app.selected_lesson_index;
+        let area = Rect::new(0, 0, 120, 40);
+        let list_area = lesson_list_area(area);
+        let header_row_y = list_area.y + 1; // display row 0 is the section header
+
+        EventHandler::handle_mouse(&mut app, left_click(Position::new(list_area.x + 2, header_row_y)), area).unwrap();
+
+        assert_eq!(app.current_view, CurrentView::PlanetLessons);
+        assert_eq!(app.selected_lesson_index, before_lesson);
     }
 
     #[test]

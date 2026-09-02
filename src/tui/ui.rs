@@ -6,8 +6,8 @@ use crate::tui::components::{
     DictationArea, DictationSummaryModal, KeyboardVisualizer, StatsBar, SummaryModal, TypingArea,
 };
 use crate::tui::planet_layout::{
-    build_rows, display_index_of, map_mode, planet_layout, ship_gutter, ship_rect, viewport_start,
-    MapMode, MenuRow,
+    display_index_of, map_mode, planet_layout, ship_gutter, ship_rect, viewport_start, MapMode,
+    MenuRow,
 };
 use crate::tui::theme::Theme;
 use ratatui::{
@@ -84,6 +84,30 @@ fn render_header(f: &mut Frame, area: Rect) {
     f.render_widget(header, area);
 }
 
+/// Rect of the galaxy map body (left panel of the [`CurrentView::MainMenu`]
+/// body row) for a full-window `frame`. Reproduces the exact `Layout` math
+/// [`render_main_menu`] uses to place the planet cards, so mouse
+/// hit-testing (`EventHandler::handle_mouse`) can never drift from render.
+pub fn map_body_area(frame: Rect) -> Rect {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(6), Constraint::Min(12), Constraint::Length(3)])
+        .split(frame);
+    let body_chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(62), Constraint::Percentage(38)])
+        .split(chunks[1]);
+    body_chunks[0]
+}
+
+/// Rect of the planet lesson list block for a full-window `frame`.
+/// [`render_planet_lessons`] uses the identical outer chunking as
+/// [`render_main_menu`], so this currently reuses [`map_body_area`]; kept as
+/// its own named function so hit-testing reads intent, not coincidence.
+pub fn lesson_list_area(frame: Rect) -> Rect {
+    map_body_area(frame)
+}
+
 fn render_main_menu(f: &mut Frame, app: &App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -97,6 +121,7 @@ fn render_main_menu(f: &mut Frame, app: &App) {
     render_header(f, chunks[0]);
 
     // 2. Body: Left = Sectors List, Right = Pilot Telemetry & Stats
+    let map_area = map_body_area(f.area());
     let body_chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(62), Constraint::Percentage(38)])
@@ -108,8 +133,8 @@ fn render_main_menu(f: &mut Frame, app: &App) {
     // lesson counters. The ship gutter (Full mode only) renders the sprite
     // via `render_ship_sprite`.
     let tier_progress = Curriculum::all_tier_progress(&app.user_progress);
-    let planet_rects = planet_layout(body_chunks[0]);
-    let is_full_mode = map_mode(body_chunks[0]) == MapMode::Full;
+    let planet_rects = planet_layout(map_area);
+    let is_full_mode = map_mode(map_area) == MapMode::Full;
 
     for (i, (tp, rect)) in tier_progress.iter().zip(planet_rects.iter()).enumerate() {
         if rect.width == 0 || rect.height == 0 {
@@ -159,7 +184,7 @@ fn render_main_menu(f: &mut Frame, app: &App) {
     }
 
     if is_full_mode {
-        render_ship_sprite(f, body_chunks[0], &planet_rects, app);
+        render_ship_sprite(f, map_area, &planet_rects, app);
     }
 
     // Sidebar: Pilot Log & Telemetry
@@ -320,21 +345,18 @@ fn render_planet_lessons(f: &mut Frame, app: &App) {
         .constraints([Constraint::Percentage(62), Constraint::Percentage(38)])
         .split(chunks[1]);
 
-    // Left panel: section-grouped lesson list for the selected tier.
+    // Left panel: section-grouped lesson list for the selected tier. `rows`
+    // is shared with `EventHandler::handle_mouse` via `App::current_tier_rows`
+    // so click hit-testing can never see a different row order than render.
     let tier = app.selected_tier();
     let lessons = app.available_lessons();
-    let tier_lessons: Vec<(usize, &Lesson)> = lessons
-        .iter()
-        .enumerate()
-        .filter(|(_, lesson)| lesson.tier == tier)
-        .collect();
-    let sections = Curriculum::all_sections();
-    let rows = build_rows(&tier_lessons, &sections);
+    let rows = app.current_tier_rows();
 
+    let list_area = lesson_list_area(f.area());
     let list_title = format!(" ◎ {} :: SECTORES ", tier.planet_name());
     let list_block = Theme::retro_block(&list_title, Theme::PRIMARY);
-    let inner = list_block.inner(body_chunks[0]);
-    f.render_widget(list_block, body_chunks[0]);
+    let inner = list_block.inner(list_area);
+    f.render_widget(list_block, list_area);
 
     if inner.height > 0 {
         let capacity = inner.height as usize;
@@ -635,6 +657,31 @@ mod tests {
         assert_eq!(planet_style(PlanetStatus::Current), ("◎", Theme::PRIMARY, "DESTINO ACTUAL"));
         assert_eq!(planet_style(PlanetStatus::InProgress), ("◍", Theme::ACCENT, "EN CURSO"));
         assert_eq!(planet_style(PlanetStatus::Unexplored), ("○", Theme::MUTED, "SIN EXPLORAR"));
+    }
+
+    #[test]
+    fn test_map_body_area_matches_render_main_menu_body_left_chunk() {
+        // Approval test: reproduces the pre-extraction inline Layout math so
+        // `map_body_area` is proven equivalent, not just plausible.
+        let area = Rect::new(0, 0, 120, 40);
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(6), Constraint::Min(12), Constraint::Length(3)])
+            .split(area);
+        let body_chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(62), Constraint::Percentage(38)])
+            .split(chunks[1]);
+
+        assert_eq!(map_body_area(area), body_chunks[0]);
+    }
+
+    #[test]
+    fn test_lesson_list_area_matches_map_body_area() {
+        // `render_planet_lessons` uses the identical outer chunking as the
+        // galaxy map, so the list block occupies the same left-panel rect.
+        let area = Rect::new(0, 0, 100, 34);
+        assert_eq!(lesson_list_area(area), map_body_area(area));
     }
 
     #[test]

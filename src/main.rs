@@ -1,19 +1,28 @@
 use crossterm::{
     cursor::Show,
+    event::{DisableMouseCapture, EnableMouseCapture},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use mecanopro::tui::{render, App, EventHandler};
 use ratatui::{backend::CrosstermBackend, layout::Rect, Terminal};
+use std::io;
 use std::io::stdout;
 use std::panic;
 use std::time::Instant;
 
+/// Restores the terminal to its normal (non-raw, main-screen, no mouse
+/// capture) state. The single implementation shared by both the panic hook
+/// and the normal teardown path so they can never drift.
+fn restore_terminal() -> io::Result<()> {
+    disable_raw_mode()?;
+    execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture, Show)
+}
+
 fn setup_panic_hook() {
     let original_hook = panic::take_hook();
     panic::set_hook(Box::new(move |panic_info| {
-        let _ = disable_raw_mode();
-        let _ = execute!(stdout(), LeaveAlternateScreen, Show);
+        let _ = restore_terminal();
         original_hook(panic_info);
     }));
 }
@@ -24,7 +33,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Setup terminal
     enable_raw_mode()?;
     let mut stdout_handle = stdout();
-    execute!(stdout_handle, EnterAlternateScreen)?;
+    execute!(stdout_handle, EnterAlternateScreen, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout_handle);
     let mut terminal = Terminal::new(backend)?;
 
@@ -39,8 +48,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Restore terminal
-    disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen, Show)?;
+    restore_terminal()?;
     terminal.show_cursor()?;
 
     Ok(())

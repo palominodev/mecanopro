@@ -6,6 +6,7 @@ use crate::core::metrics::MetricsCalculator;
 use crate::core::model::{Lesson, SessionMetrics, Tier, UserProgress};
 use crate::storage::ProgressRepository;
 use crate::tui::animation::ShipAnimation;
+use crate::tui::planet_layout::{build_rows, MenuRow};
 use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -202,6 +203,22 @@ impl App {
 
     pub fn selected_tier(&self) -> Tier {
         Tier::ALL[self.selected_planet_index]
+    }
+
+    /// Section-grouped display rows for [`Self::selected_tier`]'s lesson
+    /// list. Shared by [`crate::tui::ui::render_planet_lessons`] and
+    /// [`crate::tui::event::EventHandler::handle_mouse`] so the rendered
+    /// row order and the click hit-test row order can never drift.
+    pub fn current_tier_rows(&self) -> Vec<MenuRow> {
+        let tier = self.selected_tier();
+        let lessons = self.available_lessons();
+        let tier_lessons: Vec<(usize, &Lesson)> = lessons
+            .iter()
+            .enumerate()
+            .filter(|(_, lesson)| lesson.tier == tier)
+            .collect();
+        let sections = Curriculum::all_sections();
+        build_rows(&tier_lessons, &sections)
     }
 
     /// FLAT index of the lesson with `lesson_id` inside [`Self::available_lessons`],
