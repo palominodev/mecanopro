@@ -38,4 +38,12 @@ impl AsciiArt {
         "  /___(_)___\\   ",
         "  [ ALERTA ESCUDOS ]",
     ];
+
+    /// 2-frame thruster-flicker sprite for the galaxy map ship gutter, 7
+    /// columns wide so it fits inside [`crate::tui::planet_layout::SHIP_GUTTER_WIDTH`].
+    /// Frame 1 shows the thruster flame; frame 0 does not.
+    pub const SHIP_FRAMES: [[&'static str; 3]; 2] = [
+        ["  ▄▲▄  ", " ◄███► ", "   ▀   "],
+        ["  ▄▲▄  ", " ◄███► ", "  ╹ ╹  "],
+    ];
 }

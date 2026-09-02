@@ -5,7 +5,10 @@ use crate::tui::ascii::AsciiArt;
 use crate::tui::components::{
     DictationArea, DictationSummaryModal, KeyboardVisualizer, StatsBar, SummaryModal, TypingArea,
 };
-use crate::tui::planet_layout::{build_rows, display_index_of, map_mode, planet_layout, viewport_start, MapMode, MenuRow};
+use crate::tui::planet_layout::{
+    build_rows, display_index_of, map_mode, planet_layout, ship_gutter, ship_rect, viewport_start,
+    MapMode, MenuRow,
+};
 use crate::tui::theme::Theme;
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
@@ -102,8 +105,8 @@ fn render_main_menu(f: &mut Frame, app: &App) {
     let lessons = app.available_lessons();
 
     // Galaxy tier map: one card/row per tier ("planet"), driven by aggregated
-    // lesson counters. The ship gutter (Full mode only) stays empty until the
-    // sprite lands in PR7.
+    // lesson counters. The ship gutter (Full mode only) renders the sprite
+    // via `render_ship_sprite`.
     let tier_progress = Curriculum::all_tier_progress(&app.user_progress);
     let planet_rects = planet_layout(body_chunks[0]);
     let is_full_mode = map_mode(body_chunks[0]) == MapMode::Full;
@@ -153,6 +156,10 @@ fn render_main_menu(f: &mut Frame, app: &App) {
             ]);
             f.render_widget(Paragraph::new(line), *rect);
         }
+    }
+
+    if is_full_mode {
+        render_ship_sprite(f, body_chunks[0], &planet_rects, app);
     }
 
     // Sidebar: Pilot Log & Telemetry
@@ -231,6 +238,38 @@ fn render_main_menu(f: &mut Frame, app: &App) {
         .block(Theme::retro_block("MANDOS DE LA NAVE", Theme::MUTED))
         .alignment(Alignment::Center);
     f.render_widget(footer, chunks[2]);
+}
+
+/// Renders the animated ship sprite inside the galaxy map's ship gutter
+/// ([`MapMode::Full`] only; the caller already checked the mode). Applies a
+/// small vertical dip while [`crate::tui::animation::ShipAnimation`] is
+/// descending/ascending, and colours the thruster line differently per
+/// flicker frame.
+fn render_ship_sprite(f: &mut Frame, map_area: Rect, planet_rects: &[Rect], app: &App) {
+    let gutter = ship_gutter(map_area);
+    let frame_idx = app.ship.frame_index();
+    let frame = &AsciiArt::SHIP_FRAMES[frame_idx];
+    let sprite_h = frame.len() as u16;
+    let mut rect = ship_rect(gutter, planet_rects, app.ship.position(), sprite_h);
+    if rect.width == 0 || rect.height == 0 {
+        return;
+    }
+
+    let offset = app.ship.vertical_offset().round().min(1.0) as u16;
+    let gutter_bottom = gutter.y.saturating_add(gutter.height);
+    let max_y = gutter_bottom.saturating_sub(rect.height).max(gutter.y);
+    rect.y = rect.y.saturating_add(offset).min(max_y);
+
+    let lines: Vec<Line> = frame
+        .iter()
+        .enumerate()
+        .map(|(i, line)| {
+            let is_thruster_line = i == frame.len() - 1;
+            let color = if frame_idx == 1 && is_thruster_line { Theme::ERROR } else { Theme::ACCENT };
+            Line::from(Span::styled(*line, Style::default().fg(color)))
+        })
+        .collect();
+    f.render_widget(Paragraph::new(lines), rect);
 }
 
 /// Styled [`Line`] for one row of the planet lesson list. Headers render
@@ -517,6 +556,31 @@ mod tests {
             .iter()
             .map(|cell| cell.symbol())
             .collect()
+    }
+
+    #[test]
+    fn test_ship_sprite_renders_in_gutter_full_mode() {
+        let mut app = App::new();
+        app.user_progress = UserProgress::default();
+        app.selected_planet_index = 0;
+
+        // 120x40 is the smallest round size that actually reaches Full mode:
+        // the map body is 62% of window width and MIN_FULL_HEIGHT (30) is
+        // checked against `chunks[1].height` (window height minus the 6-row
+        // header and 3-row footer), so 100x34 (used elsewhere in this test
+        // module) stays Compact — verified via `map_mode` on the derived
+        // body rect.
+        let rendered_full = render_to_string(&app, 120, 40);
+        assert!(
+            rendered_full.contains("◄███►"),
+            "expected ship sprite in Full mode gutter:\n{rendered_full}"
+        );
+
+        let rendered_compact = render_to_string(&app, 40, 12);
+        assert!(
+            !rendered_compact.contains("◄███►"),
+            "compact mode must not render the ship sprite:\n{rendered_compact}"
+        );
     }
 
     #[test]

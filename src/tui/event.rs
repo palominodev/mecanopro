@@ -1,7 +1,7 @@
 use crate::tui::app::{App, CurrentView};
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use ratatui::layout::Rect;
 use std::io;
-use std::time::Duration;
 
 /// Row count moved by `PageUp`/`PageDown`/`Ctrl+b`/`Ctrl+f`/`Ctrl+u`/`Ctrl+d`
 /// inside [`CurrentView::PlanetLessons`].
@@ -10,8 +10,8 @@ const PAGE_SIZE: usize = 10;
 pub struct EventHandler;
 
 impl EventHandler {
-    pub fn handle_event(app: &mut App) -> io::Result<()> {
-        if event::poll(Duration::from_millis(50))? {
+    pub fn handle_event(app: &mut App, _area: Rect) -> io::Result<()> {
+        if event::poll(app.poll_interval())? {
             match event::read()? {
                 Event::Key(key) if key.kind == KeyEventKind::Press => {
                     Self::handle_key(app, key);
@@ -27,6 +27,12 @@ impl EventHandler {
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
             app.should_quit = true;
             return;
+        }
+
+        // Any keypress interrupts an in-flight ship animation, snapping it
+        // to its destination instantly instead of swallowing the key.
+        if !app.ship.is_idle() {
+            app.ship.complete();
         }
 
         match app.current_view {
@@ -181,6 +187,33 @@ mod tests {
 
         assert_eq!(app.current_view, CurrentView::PlanetLessons);
         assert_eq!(app.selected_planet_index, Tier::Tier3SpanishOrthography.index());
+    }
+
+    #[test]
+    fn test_any_keypress_during_animation_completes_it_first() {
+        let mut app = App::new();
+        app.selected_planet_index = 0;
+        app.ship = crate::tui::animation::ShipAnimation::new(0);
+        app.move_planet_down();
+        // No time has elapsed yet, so without the skip guard the ship would
+        // still be interpolating from 0.0 (its `from`) when the next travel
+        // retargets it.
+        assert_eq!(app.ship.phase(), crate::tui::animation::ShipPhase::Traveling);
+        assert!((app.ship.position() - 0.0).abs() < 1e-5);
+
+        EventHandler::handle_key(&mut app, key(KeyCode::Down));
+
+        // The guard must complete the FIRST travel (snapping to planet 1)
+        // before the key's own navigation starts a second travel (toward
+        // planet 2); the new travel's `from` proves the snap happened,
+        // instead of continuing to interpolate from the stale 0.0 origin.
+        assert_eq!(app.ship.phase(), crate::tui::animation::ShipPhase::Traveling);
+        assert!(
+            (app.ship.position() - 1.0).abs() < 1e-5,
+            "expected the completed first hop (1.0) as the new travel's origin, got {}",
+            app.ship.position()
+        );
+        assert_eq!(app.selected_planet_index, 2, "the key itself must still be processed");
     }
 
     #[test]

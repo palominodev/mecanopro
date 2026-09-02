@@ -4,9 +4,10 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use mecanopro::tui::{render, App, EventHandler};
-use ratatui::{backend::CrosstermBackend, Terminal};
+use ratatui::{backend::CrosstermBackend, layout::Rect, Terminal};
 use std::io::stdout;
 use std::panic;
+use std::time::Instant;
 
 fn setup_panic_hook() {
     let original_hook = panic::take_hook();
@@ -31,8 +32,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Main application loop
     while !app.should_quit {
+        app.tick(Instant::now());
         terminal.draw(|f| render(f, &app))?;
-        EventHandler::handle_event(&mut app)?;
+        let size = terminal.size()?;
+        EventHandler::handle_event(&mut app, Rect::new(0, 0, size.width, size.height))?;
     }
 
     // Restore terminal

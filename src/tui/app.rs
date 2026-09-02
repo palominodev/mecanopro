@@ -5,7 +5,8 @@ use crate::core::engine::TypingEngine;
 use crate::core::metrics::MetricsCalculator;
 use crate::core::model::{Lesson, SessionMetrics, Tier, UserProgress};
 use crate::storage::ProgressRepository;
-use std::time::Instant;
+use crate::tui::animation::ShipAnimation;
+use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CurrentView {
@@ -31,6 +32,8 @@ pub struct App {
     pub last_dictation_metrics: Option<DictationMetrics>,
     pub tts_speaker: SystemTtsSpeaker,
     pub should_quit: bool,
+    pub ship: ShipAnimation,
+    pub last_tick: Instant,
 }
 
 impl App {
@@ -53,6 +56,35 @@ impl App {
             last_dictation_metrics: None,
             tts_speaker,
             should_quit: false,
+            ship: ShipAnimation::new(selected_planet_index),
+            last_tick: Instant::now(),
+        }
+    }
+
+    /// Clock adapter: advances the ship animation by the elapsed time since
+    /// the last tick. Deliberately not unit-tested (a 3-line wrapper around
+    /// [`Self::advance_animation`]); covered by [`Self::advance_animation`]'s
+    /// own tests, which drive `Duration` directly.
+    pub fn tick(&mut self, now: Instant) {
+        let dt = now.saturating_duration_since(self.last_tick);
+        self.last_tick = now;
+        self.advance_animation(dt);
+    }
+
+    /// Advances the ship animation by `dt`. Pure with respect to wall-clock
+    /// time — tests drive this directly instead of sleeping or calling
+    /// `Instant::now()`.
+    pub fn advance_animation(&mut self, dt: Duration) {
+        self.ship.advance(dt);
+    }
+
+    /// Event-poll interval: fast (16ms, ~60fps) while the ship animates,
+    /// slow (50ms) while idle to avoid burning CPU.
+    pub fn poll_interval(&self) -> Duration {
+        if self.ship.is_idle() {
+            Duration::from_millis(50)
+        } else {
+            Duration::from_millis(16)
         }
     }
 
@@ -237,12 +269,14 @@ impl App {
             self.selected_lesson_index = flat_idx;
         }
         self.current_view = CurrentView::PlanetLessons;
+        self.ship.descend();
     }
 
     /// Leaves [`CurrentView::PlanetLessons`] back to the galaxy map,
     /// preserving [`Self::selected_planet_index`].
     pub fn leave_planet_lessons(&mut self) {
         self.current_view = CurrentView::MainMenu;
+        self.ship.ascend();
     }
 
     /// Returns from a finished/aborted practice session to
@@ -272,6 +306,7 @@ impl App {
                 self.current_view = CurrentView::MainMenu;
             }
         }
+        self.ship.snap_to(self.selected_planet_index);
     }
 
     /// Returns to the galaxy map, deriving [`Self::selected_planet_index`]
@@ -281,23 +316,41 @@ impl App {
             self.selected_planet_index = lesson.tier.index();
         }
         self.current_view = CurrentView::MainMenu;
+        self.ship.snap_to(self.selected_planet_index);
     }
 
     pub fn move_planet_up(&mut self) {
+        let before = self.selected_planet_index;
         self.selected_planet_index = self.selected_planet_index.saturating_sub(1);
+        self.travel_ship_if_changed(before);
     }
 
     pub fn move_planet_down(&mut self) {
+        let before = self.selected_planet_index;
         let max = Tier::ALL.len() - 1;
         self.selected_planet_index = (self.selected_planet_index + 1).min(max);
+        self.travel_ship_if_changed(before);
     }
 
     pub fn planet_home(&mut self) {
+        let before = self.selected_planet_index;
         self.selected_planet_index = 0;
+        self.travel_ship_if_changed(before);
     }
 
     pub fn planet_end(&mut self) {
+        let before = self.selected_planet_index;
         self.selected_planet_index = Tier::ALL.len() - 1;
+        self.travel_ship_if_changed(before);
+    }
+
+    /// Starts a ship flight toward [`Self::selected_planet_index`] only when
+    /// planet navigation actually moved it, avoiding a no-op `Traveling`
+    /// transition on saturated up/home/end at the edges.
+    fn travel_ship_if_changed(&mut self, before: usize) {
+        if self.selected_planet_index != before {
+            self.ship.travel_to(self.selected_planet_index);
+        }
     }
 
     pub fn start_dictation(&mut self, tier: Option<Tier>, word_count: Option<usize>) {
@@ -657,5 +710,90 @@ mod tests {
             app.selected_planet_index = i;
             assert_eq!(app.selected_tier(), Tier::ALL[i]);
         }
+    }
+
+    #[test]
+    fn test_advance_animation_progresses_ship() {
+        let mut app = App::new();
+        app.selected_planet_index = 0;
+        app.ship = crate::tui::animation::ShipAnimation::new(0);
+
+        app.move_planet_down();
+        assert!(!app.ship.is_idle());
+
+        app.advance_animation(std::time::Duration::from_secs(1));
+
+        assert!(app.ship.is_idle());
+        assert!((app.ship.position() - 1.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_poll_interval_50ms_idle_16ms_animating() {
+        let mut app = App::new();
+        app.ship = crate::tui::animation::ShipAnimation::new(0);
+
+        assert_eq!(app.poll_interval(), std::time::Duration::from_millis(50));
+
+        app.ship.travel_to(3);
+        assert_eq!(app.poll_interval(), std::time::Duration::from_millis(16));
+    }
+
+    #[test]
+    fn test_move_planet_calls_travel_to() {
+        let mut app = App::new();
+        app.selected_planet_index = 0;
+        app.ship = crate::tui::animation::ShipAnimation::new(0);
+
+        app.move_planet_down();
+
+        assert_eq!(app.ship.phase(), crate::tui::animation::ShipPhase::Traveling);
+        app.ship.complete();
+        assert!((app.ship.position() - 1.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_enter_triggers_descend() {
+        let mut app = App::new();
+        app.user_progress = UserProgress::default();
+        app.selected_planet_index = Tier::Tier1Foundation.index();
+        app.ship = crate::tui::animation::ShipAnimation::new(app.selected_planet_index);
+
+        app.enter_planet_lessons();
+
+        assert_eq!(app.ship.phase(), crate::tui::animation::ShipPhase::Descending);
+    }
+
+    #[test]
+    fn test_leave_triggers_ascend() {
+        let mut app = App::new();
+        app.user_progress = UserProgress::default();
+        app.selected_planet_index = Tier::Tier1Foundation.index();
+        app.enter_planet_lessons();
+        app.ship.complete();
+
+        app.leave_planet_lessons();
+
+        assert_eq!(app.ship.phase(), crate::tui::animation::ShipPhase::Ascending);
+    }
+
+    #[test]
+    fn test_return_snaps_ship() {
+        let mut app = App::new();
+        app.user_progress = UserProgress::default();
+        let tier5_lesson = app
+            .available_lessons()
+            .into_iter()
+            .find(|l| l.tier == Tier::Tier5SpeedAndCadence)
+            .expect("fixture needs a Tier5 lesson");
+        app.selected_lesson_index = app.flat_index_of(&tier5_lesson.id).unwrap();
+        app.selected_planet_index = Tier::Tier1Foundation.index();
+        app.ship.travel_to(6);
+
+        app.return_to_star_map();
+
+        assert!(app.ship.is_idle());
+        assert!(
+            (app.ship.position() - Tier::Tier5SpeedAndCadence.index() as f32).abs() < 1e-5
+        );
     }
 }
