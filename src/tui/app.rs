@@ -22,6 +22,7 @@ pub struct App {
     pub repository: ProgressRepository,
     pub user_progress: UserProgress,
     pub selected_lesson_index: usize,
+    pub selected_planet_index: usize,
     pub current_engine: Option<TypingEngine>,
     pub last_session_metrics: Option<SessionMetrics>,
     pub last_session_passed: bool,
@@ -36,12 +37,14 @@ impl App {
         let repository = ProgressRepository::new();
         let user_progress = repository.load();
         let tts_speaker = SystemTtsSpeaker::new();
+        let selected_planet_index = user_progress.unlocked_tier.index();
 
         Self {
             current_view: CurrentView::MainMenu,
             repository,
             user_progress,
             selected_lesson_index: 0,
+            selected_planet_index,
             current_engine: None,
             last_session_metrics: None,
             last_session_passed: false,
@@ -157,6 +160,27 @@ impl App {
         self.selected_lesson_index = self.available_lessons().len().saturating_sub(1);
     }
 
+    pub fn selected_tier(&self) -> Tier {
+        Tier::ALL[self.selected_planet_index]
+    }
+
+    pub fn move_planet_up(&mut self) {
+        self.selected_planet_index = self.selected_planet_index.saturating_sub(1);
+    }
+
+    pub fn move_planet_down(&mut self) {
+        let max = Tier::ALL.len() - 1;
+        self.selected_planet_index = (self.selected_planet_index + 1).min(max);
+    }
+
+    pub fn planet_home(&mut self) {
+        self.selected_planet_index = 0;
+    }
+
+    pub fn planet_end(&mut self) {
+        self.selected_planet_index = Tier::ALL.len() - 1;
+    }
+
     pub fn start_dictation(&mut self, tier: Option<Tier>, word_count: Option<usize>) {
         let selected_tier = tier.unwrap_or(self.user_progress.unlocked_tier);
         let count = word_count.unwrap_or(8);
@@ -265,3 +289,50 @@ impl Default for App {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::model::Tier;
+
+    #[test]
+    fn test_move_planet_up_down_no_wrap_saturating() {
+        let mut app = App::new();
+
+        app.selected_planet_index = 0;
+        app.move_planet_up();
+        assert_eq!(app.selected_planet_index, 0);
+
+        app.selected_planet_index = 6;
+        app.move_planet_down();
+        assert_eq!(app.selected_planet_index, 6);
+
+        app.selected_planet_index = 3;
+        app.move_planet_up();
+        assert_eq!(app.selected_planet_index, 2);
+        app.move_planet_down();
+        assert_eq!(app.selected_planet_index, 3);
+    }
+
+    #[test]
+    fn test_planet_home_end() {
+        let mut app = App::new();
+
+        app.selected_planet_index = 4;
+        app.planet_home();
+        assert_eq!(app.selected_planet_index, 0);
+
+        app.selected_planet_index = 2;
+        app.planet_end();
+        assert_eq!(app.selected_planet_index, 6);
+    }
+
+    #[test]
+    fn test_selected_tier_matches_index() {
+        let mut app = App::new();
+
+        for i in 0..Tier::ALL.len() {
+            app.selected_planet_index = i;
+            assert_eq!(app.selected_tier(), Tier::ALL[i]);
+        }
+    }
+}
