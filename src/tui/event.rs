@@ -26,48 +26,18 @@ impl EventHandler {
         }
 
         match app.current_view {
-            CurrentView::MainMenu => {
-                if key.modifiers.contains(KeyModifiers::CONTROL) {
-                    match key.code {
-                        KeyCode::Char('d') => {
-                            app.scroll_page_down(5);
-                            return;
-                        }
-                        KeyCode::Char('u') => {
-                            app.scroll_page_up(5);
-                            return;
-                        }
-                        KeyCode::Char('f') => {
-                            app.scroll_page_down(10);
-                            return;
-                        }
-                        KeyCode::Char('b') => {
-                            app.scroll_page_up(10);
-                            return;
-                        }
-                        _ => {}
-                    }
-                }
-
-                match key.code {
-                    KeyCode::Char('q') | KeyCode::Char('Q') => app.should_quit = true,
-                    KeyCode::Up | KeyCode::Char('k') => app.move_selection_up(),
-                    KeyCode::Down | KeyCode::Char('j') => app.move_selection_down(),
-                    KeyCode::PageUp => app.scroll_page_up(10),
-                    KeyCode::PageDown => app.scroll_page_down(10),
-                    KeyCode::Home | KeyCode::Char('g') => app.scroll_to_top(),
-                    KeyCode::End | KeyCode::Char('G') => app.scroll_to_bottom(),
-                    KeyCode::Enter => {
-                        if let Some(lesson) = app.selected_lesson() {
-                            app.start_practice(lesson);
-                        }
-                    }
-                    KeyCode::Char('v') | KeyCode::Char('V') => app.start_dictation(None, None),
-                    KeyCode::Char('d') | KeyCode::Char('D') => app.start_adaptive_drill(),
-                    KeyCode::Char('e') | KeyCode::Char('E') => app.current_view = CurrentView::Stats,
-                    _ => {}
-                }
-            }
+            CurrentView::MainMenu => match key.code {
+                KeyCode::Char('q') | KeyCode::Char('Q') => app.should_quit = true,
+                KeyCode::Up | KeyCode::Char('k') => app.move_planet_up(),
+                KeyCode::Down | KeyCode::Char('j') => app.move_planet_down(),
+                KeyCode::Home | KeyCode::Char('g') => app.planet_home(),
+                KeyCode::End | KeyCode::Char('G') => app.planet_end(),
+                KeyCode::Enter => {} // wired in PR4/5: enter_planet_lessons()
+                KeyCode::Char('v') | KeyCode::Char('V') => app.start_dictation(None, None),
+                KeyCode::Char('d') | KeyCode::Char('D') => app.start_adaptive_drill(),
+                KeyCode::Char('e') | KeyCode::Char('E') => app.current_view = CurrentView::Stats,
+                _ => {}
+            },
 
             CurrentView::Practice => match key.code {
                 KeyCode::Esc => app.current_view = CurrentView::MainMenu,

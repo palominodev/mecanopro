@@ -1,18 +1,31 @@
-use crate::core::model::Tier;
+use crate::core::model::{PlanetStatus, Tier};
 use crate::core::Curriculum;
 use crate::tui::app::{App, CurrentView};
 use crate::tui::ascii::AsciiArt;
 use crate::tui::components::{
     DictationArea, DictationSummaryModal, KeyboardVisualizer, StatsBar, SummaryModal, TypingArea,
 };
+use crate::tui::planet_layout::{map_mode, planet_layout, MapMode};
 use crate::tui::theme::Theme;
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout},
-    style::{Modifier, Style},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{List, ListItem, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap},
+    widgets::{Block, BorderType, Borders, Paragraph, Wrap},
     Frame,
 };
+
+/// Maps a [`PlanetStatus`] to its galaxy-map glyph, colour, and Spanish
+/// status badge. Colour is never the sole indicator: the glyph and badge
+/// text are always present alongside it.
+fn planet_style(status: PlanetStatus) -> (&'static str, Color, &'static str) {
+    match status {
+        PlanetStatus::Conquered => ("◉", Theme::SUCCESS, "CONQUISTADO"),
+        PlanetStatus::Current => ("◎", Theme::PRIMARY, "DESTINO ACTUAL"),
+        PlanetStatus::InProgress => ("◍", Theme::ACCENT, "EN CURSO"),
+        PlanetStatus::Unexplored => ("○", Theme::MUTED, "SIN EXPLORAR"),
+    }
+}
 
 pub fn render(f: &mut Frame, app: &App) {
     match app.current_view {
@@ -81,106 +94,60 @@ fn render_main_menu(f: &mut Frame, app: &App) {
         .split(chunks[1]);
 
     let lessons = app.available_lessons();
-    let sections = Curriculum::all_sections();
-    let visible_capacity = (body_chunks[0].height.saturating_sub(2)).max(1) as usize;
-    let selected = app.selected_lesson_index;
 
-    // One display row per lesson, plus a non-selectable header row whenever
-    // the curriculum section changes. Selection stays lesson-based.
-    enum MenuRow<'a> {
-        Header(&'a str),
-        Lesson(usize),
-    }
+    // Galaxy tier map: one card/row per tier ("planet"), driven by aggregated
+    // lesson counters. The ship gutter (Full mode only) stays empty until the
+    // sprite lands in PR7.
+    let tier_progress = Curriculum::all_tier_progress(&app.user_progress);
+    let planet_rects = planet_layout(body_chunks[0]);
+    let is_full_mode = map_mode(body_chunks[0]) == MapMode::Full;
 
-    let mut display_rows: Vec<MenuRow<'_>> = Vec::with_capacity(lessons.len() + sections.len());
-    let mut current_section: Option<&str> = None;
-    for (idx, lesson) in lessons.iter().enumerate() {
-        if current_section != Some(lesson.section_id.as_str()) {
-            let title = sections
-                .iter()
-                .find(|s| s.id == lesson.section_id)
-                .map(|s| s.title.as_str())
-                .unwrap_or(lesson.section_id.as_str());
-            display_rows.push(MenuRow::Header(title));
-            current_section = Some(lesson.section_id.as_str());
+    for (i, (tp, rect)) in tier_progress.iter().zip(planet_rects.iter()).enumerate() {
+        if rect.width == 0 || rect.height == 0 {
+            continue;
         }
-        display_rows.push(MenuRow::Lesson(idx));
-    }
 
-    let selected_display_idx = display_rows
-        .iter()
-        .position(|row| matches!(row, MenuRow::Lesson(idx) if *idx == selected))
-        .unwrap_or(0);
+        let (glyph, color, badge) = planet_style(tp.status);
+        let is_selected = i == app.selected_planet_index;
+        let text_style = if tp.status == PlanetStatus::Unexplored {
+            Style::default().fg(Theme::MUTED)
+        } else {
+            Style::default().fg(Theme::TEXT)
+        };
 
-    // Viewport window calculated over DISPLAY rows (lessons + section headers)
-    let start_idx = if selected_display_idx >= visible_capacity {
-        selected_display_idx + 1 - visible_capacity
-    } else {
-        0
-    };
-
-    let mut list_items = Vec::new();
-
-    for row in display_rows.iter().skip(start_idx).take(visible_capacity) {
-        match row {
-            MenuRow::Header(title) => {
-                list_items.push(ListItem::new(Line::from(Span::styled(
-                    format!("  ── SECCIÓN: {} ──", title),
-                    Style::default().fg(Theme::SECONDARY).add_modifier(Modifier::BOLD),
-                ))));
+        if is_full_mode {
+            let prefix = if is_selected { "▶ " } else { "  " };
+            let title = format!(" {}{} {} ── {} ", prefix, glyph, tp.tier.planet_name(), badge);
+            let mut border_style = Style::default().fg(color);
+            if is_selected {
+                border_style = border_style.add_modifier(Modifier::BOLD);
             }
-            MenuRow::Lesson(idx) => {
-                let lesson = &lessons[*idx];
-                let is_selected = *idx == selected;
-                let score = app.user_progress.completed_lessons.get(&lesson.id);
-
-                let status_badge = match score {
-                    Some(s) if s.passed => Span::styled(" [🚀 DESPEJADO] ", Style::default().fg(Theme::SUCCESS).add_modifier(Modifier::BOLD)),
-                    Some(_) => Span::styled(" [⚠ ALERTA]    ", Style::default().fg(Theme::ERROR).add_modifier(Modifier::BOLD)),
-                    None => Span::styled(" [✦ INEXPLORADO]", Style::default().fg(Theme::MUTED)),
-                };
-
-                let best_stat = if let Some(s) = score {
-                    format!("({:.0} CPM · {:.1}%)", s.cpm, s.accuracy)
-                } else {
-                    format!("(Meta: {:.0} CPM)", lesson.target_cpm)
-                };
-
-                let prefix = if is_selected { " ▶ " } else { "   " };
-                let item_style = if is_selected {
-                    Style::default().fg(Theme::PRIMARY).add_modifier(Modifier::BOLD)
-                } else {
-                    Style::default().fg(Theme::TEXT)
-                };
-
-                list_items.push(ListItem::new(Line::from(vec![
-                    Span::styled(prefix, item_style),
-                    status_badge,
-                    Span::styled(format!(" {:<44} ", lesson.title), item_style),
-                    Span::styled(best_stat, Style::default().fg(Theme::ACCENT)),
-                ])));
-            }
+            let block = Block::default()
+                .title(title)
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .border_style(border_style);
+            let content = format!(
+                "{}/{} sectores · meta {:.0} CPM · {}",
+                tp.passed,
+                tp.total,
+                tp.tier.min_cpm(),
+                tp.tier.name()
+            );
+            let paragraph = Paragraph::new(Line::from(Span::styled(content, text_style))).block(block);
+            f.render_widget(paragraph, *rect);
+        } else {
+            let prefix = if is_selected { "▶ " } else { "  " };
+            let line = Line::from(vec![
+                Span::styled(prefix, Style::default().fg(color).add_modifier(Modifier::BOLD)),
+                Span::styled(format!("{} ", glyph), Style::default().fg(color)),
+                Span::styled(format!("{:<10}  ", tp.tier.planet_name()), text_style),
+                Span::styled(format!("{}/{}  ", tp.passed, tp.total), Style::default().fg(Theme::ACCENT)),
+                Span::styled(badge, Style::default().fg(color)),
+            ]);
+            f.render_widget(Paragraph::new(line), *rect);
         }
     }
-
-    let menu_title = format!(
-        "✦ SECTORES [{}/{}] · SCROLL [PgUp/PgDn/g/G/Ctrl+d/u] ✦",
-        selected + 1,
-        lessons.len()
-    );
-
-    let lessons_list = List::new(list_items)
-        .block(Theme::retro_block(&menu_title, Theme::PRIMARY));
-    f.render_widget(lessons_list, body_chunks[0]);
-
-    // Render retro vertical scrollbar over total display rows
-    let mut scrollbar_state = ScrollbarState::new(display_rows.len()).position(selected_display_idx);
-    let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
-        .begin_symbol(Some("▲"))
-        .end_symbol(Some("▼"))
-        .track_symbol(Some("│"))
-        .thumb_symbol("█");
-    f.render_stateful_widget(scrollbar, body_chunks[0], &mut scrollbar_state);
 
     // Sidebar: Pilot Log & Telemetry
     let total_mins = app.user_progress.total_practice_seconds / 60;
@@ -242,11 +209,9 @@ fn render_main_menu(f: &mut Frame, app: &App) {
     // 3. Footer Keybinds
     let footer_spans = vec![
         Span::styled("[↑/↓ j/k] ", Style::default().fg(Theme::PRIMARY).add_modifier(Modifier::BOLD)),
-        Span::styled("Navegar  ", Style::default().fg(Theme::TEXT)),
-        Span::styled("[PgUp/PgDn / g/G] ", Style::default().fg(Theme::NEBULA_PURPLE).add_modifier(Modifier::BOLD)),
-        Span::styled("Scroll  ", Style::default().fg(Theme::TEXT)),
+        Span::styled("Planeta  ", Style::default().fg(Theme::TEXT)),
         Span::styled("[ENTER] ", Style::default().fg(Theme::SUCCESS).add_modifier(Modifier::BOLD)),
-        Span::styled("Iniciar  ", Style::default().fg(Theme::TEXT)),
+        Span::styled("Explorar  ", Style::default().fg(Theme::TEXT)),
         Span::styled("[V] ", Style::default().fg(Theme::SECONDARY).add_modifier(Modifier::BOLD)),
         Span::styled("Dictado  ", Style::default().fg(Theme::TEXT)),
         Span::styled("[D] ", Style::default().fg(Theme::ACCENT).add_modifier(Modifier::BOLD)),
@@ -409,4 +374,81 @@ fn render_stats(f: &mut Frame, app: &App) {
         .block(Theme::retro_block("ACCIONES", Theme::MUTED))
         .alignment(Alignment::Center);
     f.render_widget(footer, chunks[1]);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::model::{PlanetStatus, UserProgress};
+    use ratatui::{backend::TestBackend, Terminal};
+
+    /// Renders `app` into a `width x height` `TestBackend` buffer and returns
+    /// every cell symbol concatenated into a single string, so plain
+    /// `contains` checks can assert on rendered content.
+    fn render_to_string(app: &App, width: u16, height: u16) -> String {
+        let backend = TestBackend::new(width, height);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| render(f, app)).unwrap();
+        terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect()
+    }
+
+    #[test]
+    fn test_100x34_shows_cimientos_and_sin_explorar_badges() {
+        let mut app = App::new();
+        // Deterministic progress: Tier1 unlocked, nothing completed yet, so
+        // the galaxy map always shows CIMIENTOS as the current destination
+        // and every other planet as unexplored regardless of the player's
+        // real saved progress file.
+        app.user_progress = UserProgress::default();
+        app.selected_planet_index = 0;
+
+        let rendered = render_to_string(&app, 100, 34);
+
+        assert!(rendered.contains("CIMIENTOS"), "expected CIMIENTOS planet name in:\n{rendered}");
+        assert!(rendered.contains("SIN EXPLORAR"), "expected SIN EXPLORAR badge in:\n{rendered}");
+    }
+
+    #[test]
+    fn test_40x12_compact_shows_7_names_no_sprite_no_panic() {
+        let mut app = App::new();
+        app.user_progress = UserProgress::default();
+        app.selected_planet_index = 0;
+
+        let rendered = render_to_string(&app, 40, 12);
+
+        for tier in Tier::ALL {
+            assert!(
+                rendered.contains(tier.planet_name()),
+                "expected planet name {} in:\n{rendered}",
+                tier.planet_name()
+            );
+        }
+        assert!(!rendered.contains('▲'), "compact mode must not render the ship sprite:\n{rendered}");
+        assert!(!rendered.contains('█'), "compact mode must not render the ship sprite:\n{rendered}");
+    }
+
+    #[test]
+    fn test_1x1_area_does_not_panic() {
+        let mut app = App::new();
+        app.user_progress = UserProgress::default();
+        app.selected_planet_index = 0;
+
+        // Must not panic; the assertion below is a secondary sanity check.
+        let rendered = render_to_string(&app, 1, 1);
+        assert_eq!(rendered.chars().count(), 1);
+    }
+
+    #[test]
+    fn test_status_badges_match_precedence_for_each_glyph() {
+        assert_eq!(planet_style(PlanetStatus::Conquered), ("◉", Theme::SUCCESS, "CONQUISTADO"));
+        assert_eq!(planet_style(PlanetStatus::Current), ("◎", Theme::PRIMARY, "DESTINO ACTUAL"));
+        assert_eq!(planet_style(PlanetStatus::InProgress), ("◍", Theme::ACCENT, "EN CURSO"));
+        assert_eq!(planet_style(PlanetStatus::Unexplored), ("○", Theme::MUTED, "SIN EXPLORAR"));
+    }
 }
