@@ -113,6 +113,10 @@ impl EventHandler {
         if !app.ship.is_idle() {
             app.ship.complete();
         }
+        // The animation just completed, so a pending view switch (dock into
+        // a planet lane) commits before dispatch: the key applies under the
+        // new view in the same cycle, never swallowed by the dock window.
+        app.commit_pending_view();
 
         match app.current_view {
             CurrentView::MainMenu => match key.code {
@@ -242,6 +246,9 @@ mod tests {
         let pos = Position::new(card.x + card.width / 2, card.y + card.height / 2);
 
         EventHandler::handle_mouse(&mut app, left_click(pos), area).unwrap();
+        // Mouse never commits the pending view itself: complete the dock so
+        // the deferred PlanetLessons switch goes through before asserting.
+        app.advance_animation(crate::tui::animation::DESCEND + std::time::Duration::from_millis(1));
 
         assert_eq!(app.selected_planet_index, 3);
         assert_eq!(app.current_view, CurrentView::PlanetLessons);
@@ -266,6 +273,9 @@ mod tests {
         app.user_progress = UserProgress::default();
         app.selected_planet_index = Tier::Tier1Foundation.index();
         app.enter_planet_lessons();
+        // Deferred view switch: complete the dock first, so the click below
+        // dispatches under PlanetLessons (lesson rows), not MainMenu.
+        app.advance_animation(crate::tui::animation::DESCEND + std::time::Duration::from_millis(1));
         let area = Rect::new(0, 0, 120, 40);
         let list_area = lesson_list_area(area);
         let rows = app.current_tier_rows();
@@ -290,6 +300,9 @@ mod tests {
         app.user_progress = UserProgress::default();
         app.selected_planet_index = Tier::Tier1Foundation.index();
         app.enter_planet_lessons();
+        // Deferred view switch: complete the dock first, so the click below
+        // dispatches under PlanetLessons (lesson rows), not MainMenu.
+        app.advance_animation(crate::tui::animation::DESCEND + std::time::Duration::from_millis(1));
         let area = Rect::new(0, 0, 120, 40);
         let list_area = lesson_list_area(area);
         let rows = app.current_tier_rows();
@@ -315,6 +328,9 @@ mod tests {
         let card = cards[3];
         let pos = Position::new(card.x + card.width / 2, card.y + card.height / 2);
         EventHandler::handle_mouse(&mut app, left_click(pos), area).unwrap();
+        // Mouse never commits the pending view itself: complete the dock so
+        // the deferred PlanetLessons switch goes through before asserting.
+        app.advance_animation(crate::tui::animation::DESCEND + std::time::Duration::from_millis(1));
 
         assert_ne!(app.ship.phase(), crate::tui::animation::ShipPhase::Traveling);
         assert!((app.ship.position() - 3.0).abs() < 1e-5);
@@ -392,6 +408,9 @@ mod tests {
         app.user_progress = UserProgress::default();
         app.selected_planet_index = Tier::Tier1Foundation.index();
         app.enter_planet_lessons();
+        // Deferred view switch: complete the dock so the scroll below acts on
+        // the lesson list (MainMenu scroll would move the planet selection).
+        app.advance_animation(crate::tui::animation::DESCEND + std::time::Duration::from_millis(1));
         app.move_selection_down();
         let before = app.selected_lesson_index;
         EventHandler::handle_mouse(&mut app, mouse(MouseEventKind::ScrollUp, Position::new(0, 0)), area).unwrap();
@@ -404,6 +423,9 @@ mod tests {
         app.user_progress = UserProgress::default();
         app.selected_planet_index = Tier::Tier1Foundation.index();
         app.enter_planet_lessons();
+        // Deferred view switch: complete the dock so the click below hits the
+        // lesson row under PlanetLessons semantics.
+        app.advance_animation(crate::tui::animation::DESCEND + std::time::Duration::from_millis(1));
         let before_lesson = app.selected_lesson_index;
         let area = Rect::new(0, 0, 120, 40);
         let list_area = lesson_list_area(area);
@@ -441,6 +463,8 @@ mod tests {
         app.selected_planet_index = Tier::Tier2FullAlphabet.index();
 
         EventHandler::handle_key(&mut app, key(KeyCode::Enter));
+        // Deferred view switch: complete the dock so the pending view commits.
+        app.advance_animation(crate::tui::animation::DESCEND + std::time::Duration::from_millis(1));
 
         assert_eq!(app.current_view, CurrentView::PlanetLessons);
         let selected = app.selected_lesson().expect("a lesson must be selected");
@@ -563,6 +587,10 @@ mod tests {
             app.selected_planet_index = start_index;
 
             EventHandler::handle_key(&mut app, evt);
+            // Deferred view switch: a uniform advance is safe for every case
+            // — it completes in-flight travels (landing the assertions on the
+            // snap target) and commits the dock for the Right/l enter cases.
+            app.advance_animation(crate::tui::animation::DESCEND + std::time::Duration::from_millis(1));
 
             match effect {
                 MenuEffect::PlanetIndex(expected) => assert_eq!(

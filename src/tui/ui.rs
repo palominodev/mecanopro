@@ -937,6 +937,52 @@ mod tests {
     }
 
     #[test]
+    fn test_render_dock_visible_before_flip() {
+        let mut app = App::new();
+        app.user_progress = UserProgress::default();
+        app.selected_planet_index = Tier::Tier1Foundation.index();
+        app.enter_planet_lessons();
+        // Advance to the cubic-out midpoint of DESCEND: dock_depth == 0.5
+        // puts the ship's lane x at lerp(lane_entry, lane_core, 0.5) == 11.
+        let half_t = crate::tui::animation::DESCEND.mul_f32(1.0 - (0.5f64).cbrt() as f32);
+        app.advance_animation(half_t);
+
+        assert_eq!(
+            app.current_view,
+            CurrentView::MainMenu,
+            "the view must not flip until the dock completes"
+        );
+
+        let backend = TestBackend::new(120, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| render(f, &app)).unwrap();
+        let buffer = terminal.backend().buffer();
+
+        // MainMenu keeps rendering, docking ship included, until the dock
+        // finishes; only then does the deferred view switch go through.
+        let rendered = render_to_string(&app, 120, 40);
+        assert!(rendered.contains("◄███►"), "docking ship must stay visible pre-flip:\n{rendered}");
+        assert!(rendered.contains("CIMIENTOS"), "MainMenu content must render pre-flip:\n{rendered}");
+
+        // The dock is a real horizontal move onto the planet's lane: at
+        // progress 0.5 the ship's leftmost glyph sits at ≈11 (lerp 8→14).
+        let mut ship_col: Option<u16> = None;
+        'scan: for y in 0..buffer.area().height {
+            for x in 0..buffer.area().width {
+                if matches!(buffer.cell(ratatui::layout::Position::new(x, y)).map(|c| c.symbol()), Some("◄")) {
+                    ship_col = Some(x);
+                    break 'scan;
+                }
+            }
+        }
+        let ship_col = ship_col.expect("docking ship must render its leftmost glyph");
+        assert!(
+            (ship_col as i16 - 12).abs() <= 1,
+            "ship must sit at x≈11 mid-dock (lerp(8,14,0.5)), found leftmost glyph at x {ship_col}"
+        );
+    }
+
+    #[test]
     fn test_80x24_terminal_renders_full_mode() {
         // 80x24 is a very common default terminal size; with the lowered
         // Full-mode threshold (46x14 on the map body), it must render the
@@ -1053,6 +1099,9 @@ mod tests {
         app.user_progress = UserProgress::default();
         app.selected_planet_index = Tier::Tier1Foundation.index();
         app.enter_planet_lessons();
+        // Deferred view switch: complete the dock so the render below draws
+        // PlanetLessons (not the MainMenu with the docking ship).
+        app.advance_animation(crate::tui::animation::DESCEND + std::time::Duration::from_millis(1));
 
         let tier1_title = app
             .available_lessons()
@@ -1091,6 +1140,9 @@ mod tests {
         app.user_progress = UserProgress::default();
         app.selected_planet_index = Tier::Tier1Foundation.index();
         app.enter_planet_lessons();
+        // Deferred view switch: complete the dock so the render below draws
+        // PlanetLessons (not the MainMenu with the docking ship).
+        app.advance_animation(crate::tui::animation::DESCEND + std::time::Duration::from_millis(1));
 
         let section_title = Curriculum::all_sections()
             .into_iter()

@@ -22,6 +22,11 @@ pub enum CurrentView {
 
 pub struct App {
     pub current_view: CurrentView,
+    /// Deferred view switch: set while the ship is docking into a planet
+    /// lane, committed by [`App::commit_pending_view`] once the ship is
+    /// idle (or by a keypress that completes the animation first). Keeps
+    /// the docking ship visible on the galaxy map until the dock finishes.
+    pub pending_view: Option<CurrentView>,
     pub repository: ProgressRepository,
     pub user_progress: UserProgress,
     pub selected_lesson_index: usize,
@@ -46,6 +51,7 @@ impl App {
 
         Self {
             current_view: CurrentView::MainMenu,
+            pending_view: None,
             repository,
             user_progress,
             selected_lesson_index: 0,
@@ -74,9 +80,25 @@ impl App {
 
     /// Advances the ship animation by `dt`. Pure with respect to wall-clock
     /// time — tests drive this directly instead of sleeping or calling
-    /// `Instant::now()`.
+    /// `Instant::now()`. A completed dock commits the deferred view switch
+    /// at the end of the advance, so the view flips exactly when the ship
+    /// lands (Idle), never a frame early.
     pub fn advance_animation(&mut self, dt: Duration) {
         self.ship.advance(dt);
+        self.commit_pending_view();
+    }
+
+    /// Commits the deferred view switch once the ship is idle: if a view is
+    /// pending and the dock finished, the current view flips and the pending
+    /// slot clears. No-op otherwise, so a mid-flight or interrupted dock
+    /// never flips early. Keypresses also call this right after completing
+    /// the animation, so a key can never be swallowed by the dock window.
+    pub fn commit_pending_view(&mut self) {
+        if self.ship.is_idle() {
+            if let Some(view) = self.pending_view.take() {
+                self.current_view = view;
+            }
+        }
     }
 
     /// Event-poll interval: fast (16ms, ~60fps) while the ship animates,
@@ -235,6 +257,14 @@ impl App {
     /// so this is a single contiguous range). Everywhere else — and when the
     /// selected tier unexpectedly has no lessons — the full lesson list is
     /// the valid range.
+    ///
+    /// AWARENESS: this couples selection semantics to `current_view`, which
+    /// is a latent blast-radius amplifier for any future test that enters
+    /// `PlanetLessons` by calling [`Self::enter_planet_lessons`] and then
+    /// navigates without committing the deferred view switch — the view is
+    /// still `MainMenu`, so clamping silently falls back to the full range.
+    /// Migrations accompany every `enter_planet_lessons` call that asserts
+    /// tier-clamped selection.
     fn selection_bounds(&self) -> (usize, usize) {
         let lessons = self.available_lessons();
         let full_range = (0, lessons.len().saturating_sub(1));
@@ -260,7 +290,9 @@ impl App {
     /// Enters [`CurrentView::PlanetLessons`] for [`Self::selected_tier`],
     /// resuming on the first lesson of that tier without a passed
     /// [`crate::core::model::BestScore`], or the tier's first lesson if all
-    /// are passed.
+    /// are passed. The switch is deferred: the galaxy map keeps rendering
+    /// the descending ship until the dock completes (or a keypress commits
+    /// the pending view), then `current_view` flips.
     pub fn enter_planet_lessons(&mut self) {
         let tier = self.selected_tier();
         let lessons = self.available_lessons();
@@ -285,7 +317,7 @@ impl App {
         if let Some(&(flat_idx, _)) = target {
             self.selected_lesson_index = flat_idx;
         }
-        self.current_view = CurrentView::PlanetLessons;
+        self.pending_view = Some(CurrentView::PlanetLessons);
         self.ship.descend();
     }
 
@@ -490,6 +522,8 @@ mod tests {
         app.selected_planet_index = Tier::Tier2FullAlphabet.index();
 
         app.enter_planet_lessons();
+        // Deferred view switch: complete the dock so the pending view commits.
+        app.advance_animation(crate::tui::animation::DESCEND + std::time::Duration::from_millis(1));
 
         assert_eq!(app.current_view, CurrentView::PlanetLessons);
         let selected = app.selected_lesson().expect("a lesson must be selected");
@@ -578,6 +612,8 @@ mod tests {
 
         app.selected_planet_index = Tier::Tier7GrandMaster.index();
         app.enter_planet_lessons();
+        // Deferred view switch: complete the dock so the pending view commits.
+        app.advance_animation(crate::tui::animation::DESCEND + std::time::Duration::from_millis(1));
 
         assert_eq!(app.current_view, CurrentView::PlanetLessons);
         let selected = app
@@ -592,6 +628,10 @@ mod tests {
         app.user_progress = UserProgress::default();
         app.selected_planet_index = Tier::Tier1Foundation.index();
         app.enter_planet_lessons();
+        // Deferred view switch: complete the dock so selection_bounds clamps
+        // to the tier (it returns the full curriculum while view is still
+        // MainMenu).
+        app.advance_animation(crate::tui::animation::DESCEND + std::time::Duration::from_millis(1));
 
         let tier1_lessons: Vec<_> = app
             .available_lessons()
@@ -636,6 +676,9 @@ mod tests {
         app.user_progress = UserProgress::default();
         app.selected_planet_index = Tier::Tier4NumbersAndSymbols.index();
         app.enter_planet_lessons();
+        // Deferred view switch: complete the dock before leaving, mirroring
+        // how a docked ship rises on ESC.
+        app.advance_animation(crate::tui::animation::DESCEND + std::time::Duration::from_millis(1));
         assert_eq!(app.current_view, CurrentView::PlanetLessons);
 
         app.leave_planet_lessons();
