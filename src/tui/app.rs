@@ -94,10 +94,10 @@ impl App {
     /// never flips early. Keypresses also call this right after completing
     /// the animation, so a key can never be swallowed by the dock window.
     pub fn commit_pending_view(&mut self) {
-        if self.ship.is_idle() {
-            if let Some(view) = self.pending_view.take() {
-                self.current_view = view;
-            }
+        // Short-circuit keeps `take()` from running while the ship is
+        // mid-flight: only a landed dock can commit a pending switch.
+        if self.ship.is_idle() && let Some(view) = self.pending_view.take() {
+            self.current_view = view;
         }
     }
 
