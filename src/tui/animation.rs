@@ -157,9 +157,11 @@ impl ShipAnimation {
         ((self.total_elapsed.as_millis() / FLICKER.as_millis()) % 2) as usize
     }
 
-    /// Unitless descent factor the renderer maps to gutter cells: `0.0`
-    /// idle/traveling, `progress()` descending, `1.0 - progress()` ascending.
-    pub fn vertical_offset(&self) -> f32 {
+    /// Unitless dock depth the renderer maps onto the sprite lane: `0.0`
+    /// means cruising at the lane edge, `1.0` means docked into the lane
+    /// core. `progress()` while descending, `1.0 - progress()` ascending,
+    /// and `0.0` whenever idle or traveling.
+    pub fn dock_depth(&self) -> f32 {
         match self.phase {
             ShipPhase::Idle | ShipPhase::Traveling => 0.0,
             ShipPhase::Descending => self.progress(),
@@ -342,23 +344,58 @@ mod tests {
         assert_eq!(anim.frame_index(), 0, "240ms total elapsed");
     }
 
+    /// Exercise arm: the exhaustive match makes the phase set a
+    /// compile-time contract — adding a fifth `ShipPhase` variant fails to
+    /// build instead of silently widening the contract.
+    fn phase_count(phase: ShipPhase) -> usize {
+        match phase {
+            ShipPhase::Idle => 1,
+            ShipPhase::Traveling => 1,
+            ShipPhase::Descending => 1,
+            ShipPhase::Ascending => 1,
+        }
+    }
+
     #[test]
-    fn test_vertical_offset_by_phase() {
+    fn test_animation_durations_unchanged() {
+        // Contract test: the voyage extends Traveling to 2-D but must not
+        // add any phase, duration, or easing. Any change to these constants
+        // is a deliberate, spec-rejected break.
+        assert_eq!(HOP, Duration::from_millis(140));
+        assert_eq!(TRAVEL_MIN, Duration::from_millis(140));
+        assert_eq!(TRAVEL_MAX, Duration::from_millis(420));
+        assert_eq!(DESCEND, Duration::from_millis(260));
+        assert_eq!(ASCEND, Duration::from_millis(200));
+        assert_eq!(FLICKER, Duration::from_millis(120));
+        let phase_total: usize = [
+            ShipPhase::Idle,
+            ShipPhase::Traveling,
+            ShipPhase::Descending,
+            ShipPhase::Ascending,
+        ]
+        .into_iter()
+        .map(phase_count)
+        .sum();
+        assert_eq!(phase_total, 4, "ShipPhase variant set must stay exactly Idle/Traveling/Descending/Ascending");
+    }
+
+    #[test]
+    fn test_dock_depth_by_phase() {
         let mut anim = ShipAnimation::new(0);
-        assert_eq!(anim.vertical_offset(), 0.0, "idle");
+        assert_eq!(anim.dock_depth(), 0.0, "idle: cruising at the lane edge");
 
         anim.travel_to(1);
-        assert_eq!(anim.vertical_offset(), 0.0, "traveling");
+        assert_eq!(anim.dock_depth(), 0.0, "traveling: still cruising");
 
         anim.descend();
-        assert_eq!(anim.vertical_offset(), 0.0, "descend start");
+        assert_eq!(anim.dock_depth(), 0.0, "descend start: not yet docked");
         anim.advance(anim.duration() / 2);
-        assert!((anim.vertical_offset() - 0.875).abs() < 1e-4, "descend mid");
+        assert!((anim.dock_depth() - 0.875).abs() < 1e-4, "descend mid");
         anim.complete();
 
         anim.ascend();
-        assert_eq!(anim.vertical_offset(), 1.0, "ascend start");
+        assert_eq!(anim.dock_depth(), 1.0, "ascend start: still docked into the core");
         anim.advance(anim.duration() / 2);
-        assert!((anim.vertical_offset() - 0.125).abs() < 1e-4, "ascend mid");
+        assert!((anim.dock_depth() - 0.125).abs() < 1e-4, "ascend mid");
     }
 }

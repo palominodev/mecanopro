@@ -280,7 +280,7 @@ fn render_ship_sprite(f: &mut Frame, map_area: Rect, planet_rects: &[Rect], app:
         return;
     }
 
-    let offset = app.ship.vertical_offset().round().min(1.0) as u16;
+    let offset = app.ship.dock_depth().round().min(1.0) as u16;
     let gutter_bottom = gutter.y.saturating_add(gutter.height);
     let max_y = gutter_bottom.saturating_sub(rect.height).max(gutter.y);
     rect.y = rect.y.saturating_add(offset).min(max_y);
