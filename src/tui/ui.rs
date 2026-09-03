@@ -1,13 +1,14 @@
 use crate::core::model::{Lesson, PlanetStatus, Tier};
 use crate::core::Curriculum;
+use crate::tui::animation::ShipPhase;
 use crate::tui::app::{App, CurrentView};
 use crate::tui::ascii::AsciiArt;
 use crate::tui::components::{
     DictationArea, DictationSummaryModal, KeyboardVisualizer, StatsBar, SummaryModal, TypingArea,
 };
 use crate::tui::planet_layout::{
-    display_index_of, info_column, map_mode, planet_layout, ship_gutter, ship_rect, sprite_lane,
-    viewport_start, MapMode, MenuRow,
+    display_index_of, info_column, map_mode, planet_layout, ship_gutter, ship_rect, ship_x,
+    sprite_lane, viewport_start, MapMode, MenuRow,
 };
 use crate::tui::theme::Theme;
 use ratatui::{
@@ -372,25 +373,58 @@ fn render_main_menu(f: &mut Frame, app: &App) {
     f.render_widget(footer, chunks[2]);
 }
 
-/// Renders the animated ship sprite inside the galaxy map's ship gutter
-/// ([`MapMode::Full`] only; the caller already checked the mode). Applies a
-/// small vertical dip while [`crate::tui::animation::ShipAnimation`] is
-/// descending/ascending, and colours the thruster line differently per
-/// flicker frame.
+/// Renders the animated ship sprite on the galaxy map ([`MapMode::Full`]
+/// only; the caller already checked the mode). The 2-D voyage drives the
+/// column through [`ship_x`]: while traveling the ship parks at the target
+/// card's lane edge, and docking/ascending lerp its column onto/off the
+/// planet lane toward its core. The row (Y) and height still come from
+/// [`ship_rect`] (its gutter-based X and width are discarded — documented
+/// below); a WARP_TRAIL underlay streaks toward the ship gutter behind the
+/// ship during [`ShipPhase::Traveling`], flicker-synced with the thruster
+/// frames.
 fn render_ship_sprite(f: &mut Frame, map_area: Rect, planet_rects: &[Rect], app: &App) {
     let gutter = ship_gutter(map_area);
     let frame_idx = app.ship.frame_index();
     let frame = &AsciiArt::SHIP_FRAMES[frame_idx];
     let sprite_h = frame.len() as u16;
+    let frame_w = AsciiArt::SHIP_FRAME_WIDTH as u16;
+
+    // Row (Y) and height come from the gutter layout; the gutter-based X and
+    // width are discarded because the 2-D voyage owns the column.
     let mut rect = ship_rect(gutter, planet_rects, app.ship.position(), sprite_h);
     if rect.width == 0 || rect.height == 0 {
         return;
     }
 
-    let offset = app.ship.dock_depth().round().min(1.0) as u16;
-    let gutter_bottom = gutter.y.saturating_add(gutter.height);
-    let max_y = gutter_bottom.saturating_sub(rect.height).max(gutter.y);
-    rect.y = rect.y.saturating_add(offset).min(max_y);
+    let x = ship_x(
+        gutter,
+        planet_rects,
+        app.ship.position(),
+        app.selected_planet_index,
+        app.ship.phase(),
+        app.ship.dock_depth(),
+    )
+    .round() as u16;
+    let max_x = map_area
+        .x
+        .saturating_add(map_area.width)
+        .saturating_sub(frame_w)
+        .max(map_area.x);
+    rect.x = x.min(max_x);
+    rect.width = frame_w;
+
+    // WARP_TRAIL underlay: horizontal streaks back toward the ship gutter,
+    // flicker-synced with the thruster frames while the ship is mid-flight.
+    if app.ship.phase() == ShipPhase::Traveling {
+        let trail = &AsciiArt::WARP_TRAIL[frame_idx];
+        let trail_x = (i32::from(rect.x) - i32::from(frame_w)).max(i32::from(map_area.x)) as u16;
+        let trail_rect = Rect::new(trail_x, rect.y, frame_w, rect.height);
+        let trail_lines: Vec<Line> = trail
+            .iter()
+            .map(|row| Line::from(Span::styled(*row, Style::default().fg(Theme::ACCENT))))
+            .collect();
+        f.render_widget(Paragraph::new(trail_lines), trail_rect);
+    }
 
     let lines: Vec<Line> = frame
         .iter()
@@ -669,6 +703,7 @@ fn render_stats(f: &mut Frame, app: &App) {
 mod tests {
     use super::*;
     use crate::core::model::{PlanetStatus, UserProgress};
+    use crate::tui::planet_layout::{planet_at, SHIP_GUTTER_WIDTH};
     use ratatui::{backend::TestBackend, Terminal};
 
     /// Renders `app` into a `width x height` `TestBackend` buffer and returns
@@ -783,7 +818,78 @@ mod tests {
     }
 
     #[test]
-    fn test_ship_sprite_renders_in_gutter_full_mode() {
+    fn test_render_ship_in_lane_during_travel() {
+        let mut app = App::new();
+        app.user_progress = UserProgress::default();
+        app.selected_planet_index = 0;
+        app.move_planet_down(); // Traveling toward planet 1, still mid-flight
+
+        let backend = TestBackend::new(120, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| render(f, &app)).unwrap();
+        let buffer = terminal.backend().buffer();
+
+        let map = map_body_area(Rect::new(0, 0, 120, 40));
+        let lane_left = map.x + SHIP_GUTTER_WIDTH;
+        let mut ship_min_x: Option<u16> = None;
+        for y in map.y..map.y + map.height {
+            for x in 0..map.width {
+                if let Some(cell) = buffer.cell(ratatui::layout::Position::new(x, y)) {
+                    if matches!(cell.symbol(), "◄" | "►" | "█") {
+                        ship_min_x = Some(ship_min_x.map_or(x, |m: u16| m.min(x)));
+                    }
+                }
+            }
+        }
+        let ship_min_x = ship_min_x.expect("travelling ship must render its sprite");
+        assert!(
+            ship_min_x >= lane_left,
+            "ship glyphs must sit at the lane edge (x >= {lane_left}), found min x {ship_min_x}"
+        );
+
+        // WARP_TRAIL streaks (═ is exclusive to the trail) flicker behind the
+        // ship, pointing back toward the gutter, during the whole flight.
+        let rendered = render_to_string(&app, 120, 40);
+        assert!(rendered.contains('═'), "WARP_TRAIL must be visible during travel:\n{rendered}");
+    }
+
+    #[test]
+    fn test_planet_at_never_resolves_under_ship() {
+        let mut app = App::new();
+        app.user_progress = UserProgress::default();
+        app.selected_planet_index = Tier::Tier4NumbersAndSymbols.index();
+        app.ship = crate::tui::animation::ShipAnimation::new(app.selected_planet_index);
+        app.enter_planet_lessons();
+        // Mid-dock: advance exactly to the cubic-out t where progress() ==
+        // 0.5, so the ship's lane x is the midpoint of the ~6-cell dock.
+        let half_t = crate::tui::animation::DESCEND.mul_f32(1.0 - (0.5f64).cbrt() as f32);
+        app.advance_animation(half_t);
+
+        let map = map_body_area(Rect::new(0, 0, 120, 40));
+        let cards = planet_layout(map);
+        let gutter = ship_gutter(map);
+        let i = app.selected_planet_index;
+        let lane_x = ship_x(
+            gutter,
+            &cards,
+            app.ship.position(),
+            app.selected_planet_index,
+            app.ship.phase(),
+            app.ship.dock_depth(),
+        );
+        let top = ship_rect(gutter, &cards, app.ship.position(), AsciiArt::SHIP_FRAMES[0].len() as u16).y;
+        // A point under the docked ship, inside card i's rect, must resolve
+        // to card i: cards drive hit-testing, the ship sprite never does.
+        let under_ship = ratatui::layout::Position::new(lane_x.round() as u16 + 2, top + 1);
+        assert_eq!(
+            planet_at(map, under_ship),
+            Some(i),
+            "hit-testing must resolve by card rect, never by the ship sprite"
+        );
+    }
+
+    #[test]
+    fn test_ship_sprite_renders_at_lane_edge_full_mode() {
         let mut app = App::new();
         app.user_progress = UserProgress::default();
         app.selected_planet_index = 0;
@@ -797,7 +903,30 @@ mod tests {
         let rendered_full = render_to_string(&app, 120, 40);
         assert!(
             rendered_full.contains("◄███►"),
-            "expected ship sprite in Full mode gutter:\n{rendered_full}"
+            "expected ship sprite in Full mode:\n{rendered_full}"
+        );
+
+        // The 2-D voyage parks the ship at the selected card's lane edge, not
+        // inside the 8-column gutter: no ship glyph may sit before the lane.
+        let backend = TestBackend::new(120, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| render(f, &app)).unwrap();
+        let buffer = terminal.backend().buffer();
+        let map = map_body_area(Rect::new(0, 0, 120, 40));
+        let lane_left = map.x + SHIP_GUTTER_WIDTH;
+        let mut leftmost: Option<u16> = None;
+        'scan: for x in 0..buffer.area().width {
+            for y in 0..buffer.area().height {
+                if matches!(buffer.cell(ratatui::layout::Position::new(x, y)).map(|c| c.symbol()), Some("◄" | "►")) {
+                    leftmost = Some(x);
+                    break 'scan;
+                }
+            }
+        }
+        let leftmost = leftmost.expect("ship sprite must render in Full mode");
+        assert!(
+            leftmost >= lane_left,
+            "ship must park at the lane edge (x >= {lane_left}), found leftmost glyph at x {leftmost}"
         );
 
         let rendered_compact = render_to_string(&app, 40, 12);
