@@ -6,17 +6,18 @@ use crate::tui::components::{
     DictationArea, DictationSummaryModal, KeyboardVisualizer, StatsBar, SummaryModal, TypingArea,
 };
 use crate::tui::planet_layout::{
-    display_index_of, map_mode, planet_layout, ship_gutter, ship_rect, viewport_start, MapMode,
-    MenuRow,
+    display_index_of, info_column, map_mode, planet_layout, ship_gutter, ship_rect, sprite_lane,
+    viewport_start, MapMode, MenuRow,
 };
 use crate::tui::theme::Theme;
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, BorderType, Borders, Paragraph, Wrap},
+    widgets::{Paragraph, Wrap},
     Frame,
 };
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 /// Maps a [`PlanetStatus`] to its galaxy-map glyph, colour, and Spanish
 /// status badge. Colour is never the sole indicator: the glyph and badge
@@ -108,6 +109,106 @@ pub fn lesson_list_area(frame: Rect) -> Rect {
     map_body_area(frame)
 }
 
+/// Minimum info-column width (in columns) that still shows the secondary
+/// meta text inside a Full-mode card; below this rung the meta drops while
+/// the glyph, badge, and progress are never dropped.
+const INFO_COLUMN_FULL_DETAIL: u16 = 26;
+
+/// Truncates `s` to fit `max_width` display columns, appending an ellipsis.
+fn ellipsize(s: &str, max_width: u16) -> String {
+    if max_width == 0 {
+        return String::new();
+    }
+    if UnicodeWidthStr::width(s) as u16 <= max_width {
+        return s.to_string();
+    }
+    let mut out = String::new();
+    let mut w = 0usize;
+    for ch in s.chars() {
+        let cw = ch.width().unwrap_or(0);
+        if w + cw > max_width.saturating_sub(1) as usize {
+            break;
+        }
+        out.push(ch);
+        w += cw;
+    }
+    format!("{out}…")
+}
+
+/// Pure content of one Full-mode planet row's info column: `[name, status
+/// line, progress line]`. Degrades monotonically with `width`: (1) the
+/// secondary meta text drops first, (2) the planet name is ellipsized.
+/// The status glyph, the badge, and the progress are never dropped.
+fn info_column_content(
+    name: &str,
+    glyph: &str,
+    badge: &str,
+    progress: &str,
+    meta: Option<&str>,
+    width: u16,
+) -> [String; 3] {
+    [
+        ellipsize(name, width),
+        format!("{glyph} {badge}"),
+        match meta {
+            Some(m) if width >= INFO_COLUMN_FULL_DETAIL => m.to_string(),
+            _ => progress.to_string(),
+        },
+    ]
+}
+
+/// Pre-formatted text pieces of one Full-mode planet row's info column.
+struct InfoRow<'a> {
+    /// Display name; the selection marker `▶` is already prefixed.
+    name: &'a str,
+    glyph: &'a str,
+    color: Color,
+    badge: &'a str,
+    progress: &'a str,
+    meta: &'a str,
+}
+
+/// Renders the info column of a Full-mode planet row, delegating the content
+/// degrade to [`info_column_content`]. Selection bolds the whole column.
+fn render_info_column(
+    f: &mut Frame,
+    area: Rect,
+    row: &InfoRow,
+    is_selected: bool,
+    text_style: Style,
+) {
+    let base_color = text_style.fg.unwrap_or(Theme::TEXT);
+    let content = info_column_content(
+        row.name,
+        row.glyph,
+        row.badge,
+        row.progress,
+        Some(row.meta),
+        area.width,
+    );
+    let lines: Vec<Line> = content
+        .iter()
+        .enumerate()
+        .map(|(i, text)| {
+            let line_color = if i == 1 {
+                row.color
+            } else if i == 2 {
+                Theme::ACCENT
+            } else {
+                base_color
+            };
+            let style = Style::default().fg(line_color);
+            let style = if is_selected {
+                style.add_modifier(Modifier::BOLD)
+            } else {
+                style
+            };
+            Line::from(Span::styled(text.clone(), style))
+        })
+        .collect();
+    f.render_widget(Paragraph::new(lines), area);
+}
+
 fn render_main_menu(f: &mut Frame, app: &App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -150,26 +251,32 @@ fn render_main_menu(f: &mut Frame, app: &App) {
         };
 
         if is_full_mode {
-            let prefix = if is_selected { "▶ " } else { "  " };
-            let title = format!(" {}{} {} ── {} ", prefix, glyph, tp.tier.planet_name(), badge);
-            let mut border_style = Style::default().fg(color);
-            if is_selected {
-                border_style = border_style.add_modifier(Modifier::BOLD);
-            }
-            let block = Block::default()
-                .title(title)
-                .borders(Borders::ALL)
-                .border_type(BorderType::Rounded)
-                .border_style(border_style);
-            let content = format!(
-                "{}/{} sectores · meta {:.0} CPM · {}",
-                tp.passed,
-                tp.total,
-                tp.tier.min_cpm(),
-                tp.tier.name()
-            );
-            let paragraph = Paragraph::new(Line::from(Span::styled(content, text_style))).block(block);
-            f.render_widget(paragraph, *rect);
+            // Borderless card: [sprite lane | info column]. Deliberately no
+            // `Block`/`Borders` — the card rect must stay free of ╭╮╰╯ chrome.
+            let lane = sprite_lane(*rect);
+            let info = info_column(*rect);
+            let sprite_lines: Vec<Line> = AsciiArt::PLANET_SPRITES[i]
+                .lines()
+                .map(|row| Line::from(Span::styled(row, Style::default().fg(color))))
+                .collect();
+            f.render_widget(Paragraph::new(sprite_lines), lane);
+
+            let display_name = if is_selected {
+                format!("▶ {}", tp.tier.planet_name())
+            } else {
+                tp.tier.planet_name().to_string()
+            };
+            let progress = format!("{}/{}", tp.passed, tp.total);
+            let meta = format!("{progress} sectores · meta {:.0} CPM", tp.tier.min_cpm());
+            let row = InfoRow {
+                name: &display_name,
+                glyph,
+                color,
+                badge,
+                progress: &progress,
+                meta: &meta,
+            };
+            render_info_column(f, info, &row, is_selected, text_style);
         } else {
             let prefix = if is_selected { "▶ " } else { "  " };
             let line = Line::from(vec![
@@ -578,6 +685,101 @@ mod tests {
             .iter()
             .map(|cell| cell.symbol())
             .collect()
+    }
+
+    /// Concatenates the symbols of the cells inside `rect`, so assertions
+    /// can scope their scans to a single widget's area.
+    fn rect_symbols(buffer: &ratatui::buffer::Buffer, rect: Rect) -> String {
+        let mut out = String::new();
+        for y in rect.y..rect.y + rect.height {
+            for x in rect.x..rect.x + rect.width {
+                if let Some(cell) = buffer.cell(ratatui::layout::Position::new(x, y)) {
+                    out.push_str(cell.symbol());
+                }
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn test_info_column_degrades_monotonically() {
+        let long_name = "ORTOGRAFÍA ALARGADA";
+        let meta = Some("7/9 sectores · meta 175 CPM");
+        let rungs = [26u16, 22, 16, 10];
+        let contents: Vec<[String; 3]> = rungs
+            .map(|w| info_column_content(long_name, "◎", "DESTINO ACTUAL", "7/9", meta, w))
+            .to_vec();
+
+        // Secondary meta text drops first: only the {26} rung keeps it...
+        assert!(contents[0][2].contains("sectores"), "rung 26 must show meta text: {:?}", contents[0]);
+        for c in &contents[1..] {
+            assert!(!c[2].contains("sectores"), "rungs < 26 must drop meta text: {:?}", c);
+        }
+        assert!(contents[3][2].contains("7/9"), "progress must never drop: {:?}", contents[3][2]);
+
+        // ...then the planet name ellipsizes once it no longer fits.
+        assert_eq!(contents[0][0], long_name, "name fits at rung 26 untouched");
+        assert!(contents[2][0].ends_with('…'), "rung 16 must ellipsize the name: {:?}", contents[2][0]);
+        assert!(contents[3][0].ends_with('…'), "rung 10 must ellipsize the name: {:?}", contents[3][0]);
+
+        // Glyph + badge + progress NEVER drop at any rung (content-wise).
+        for c in &contents {
+            let joined = c.join("\n");
+            assert!(joined.contains('◎'), "glyph must survive every rung: {joined}");
+            assert!(joined.contains("DESTINO ACTUAL"), "badge must survive every rung: {joined}");
+            assert!(joined.contains("7/9"), "progress must survive every rung: {joined}");
+        }
+
+        // The amount of shown detail never grows as the column shrinks.
+        let detail: Vec<usize> = contents
+            .iter()
+            .map(|c| c.iter().map(|line| UnicodeWidthStr::width(line.as_str())).sum())
+            .collect();
+        assert!(
+            detail.windows(2).all(|w| w[0] >= w[1]),
+            "detail must be monotonic non-increasing as width shrinks: {detail:?}"
+        );
+    }
+
+    #[test]
+    fn test_full_mode_planets_are_borderless_sprites() {
+        let mut app = App::new();
+        app.user_progress = UserProgress::default();
+        app.selected_planet_index = 0;
+
+        let backend = TestBackend::new(120, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| render(f, &app)).unwrap();
+        let buffer = terminal.backend().buffer();
+
+        let map = map_body_area(Rect::new(0, 0, 120, 40));
+        let cards = planet_layout(map);
+        let progresses = Curriculum::all_tier_progress(&app.user_progress);
+
+        for (i, card) in cards.iter().enumerate() {
+            let symbols = rect_symbols(buffer, *card);
+            for corner in ['╭', '╮', '╰', '╯'] {
+                assert!(
+                    !symbols.contains(corner),
+                    "card {i} must not render a rounded border inside its rect:\n{symbols}"
+                );
+            }
+            let tp = &progresses[i];
+            let (glyph, _, badge) = planet_style(tp.status);
+            assert!(symbols.contains(glyph), "card {i} must show status glyph '{glyph}' in:\n{symbols}");
+            assert!(symbols.contains(badge), "card {i} must show badge '{badge}' in:\n{symbols}");
+            let progress = format!("{}/{}", tp.passed, tp.total);
+            assert!(symbols.contains(&progress), "card {i} must show progress '{progress}' in:\n{symbols}");
+            // The sprite's rightmost glyph sits outside the 7-column ship
+            // cover, so it stays visible even on the selected card's lane.
+            let last_line = AsciiArt::PLANET_SPRITES[i].lines().last().unwrap();
+            let anchor = last_line
+                .chars()
+                .rev()
+                .find(|c| !c.is_whitespace())
+                .expect("sprite last row must end in a glyph");
+            assert!(symbols.contains(anchor), "card {i} must show sprite glyph '{anchor}' in:\n{symbols}");
+        }
     }
 
     #[test]
