@@ -590,7 +590,9 @@ mod tests {
             // Deferred view switch: a uniform advance is safe for every case
             // — it completes in-flight travels (landing the assertions on the
             // snap target) and commits the dock for the Right/l enter cases.
-            app.advance_animation(crate::tui::animation::DESCEND + std::time::Duration::from_millis(1));
+            app.advance_animation(
+                crate::tui::animation::DESCEND + std::time::Duration::from_millis(1),
+            );
 
             match effect {
                 MenuEffect::PlanetIndex(expected) => assert_eq!(

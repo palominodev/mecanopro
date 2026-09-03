@@ -431,7 +431,11 @@ fn render_ship_sprite(f: &mut Frame, map_area: Rect, planet_rects: &[Rect], app:
         .enumerate()
         .map(|(i, line)| {
             let is_thruster_line = i == frame.len() - 1;
-            let color = if frame_idx == 1 && is_thruster_line { Theme::ERROR } else { Theme::ACCENT };
+            let color = if frame_idx == 1 && is_thruster_line {
+                Theme::ERROR
+            } else {
+                Theme::ACCENT
+            };
             Line::from(Span::styled(*line, Style::default().fg(color)))
         })
         .collect();
@@ -850,7 +854,10 @@ mod tests {
         // WARP_TRAIL streaks (═ is exclusive to the trail) flicker behind the
         // ship, pointing back toward the gutter, during the whole flight.
         let rendered = render_to_string(&app, 120, 40);
-        assert!(rendered.contains('═'), "WARP_TRAIL must be visible during travel:\n{rendered}");
+        assert!(
+            rendered.contains('═'),
+            "WARP_TRAIL must be visible during travel:\n{rendered}"
+        );
     }
 
     #[test]
@@ -877,7 +884,13 @@ mod tests {
             app.ship.phase(),
             app.ship.dock_depth(),
         );
-        let top = ship_rect(gutter, &cards, app.ship.position(), AsciiArt::SHIP_FRAMES[0].len() as u16).y;
+        let top = ship_rect(
+            gutter,
+            &cards,
+            app.ship.position(),
+            AsciiArt::SHIP_FRAMES[0].len() as u16,
+        )
+        .y;
         // A point under the docked ship, inside card i's rect, must resolve
         // to card i: cards drive hit-testing, the ship sprite never does.
         let under_ship = ratatui::layout::Position::new(lane_x.round() as u16 + 2, top + 1);
@@ -917,7 +930,12 @@ mod tests {
         let mut leftmost: Option<u16> = None;
         'scan: for x in 0..buffer.area().width {
             for y in 0..buffer.area().height {
-                if matches!(buffer.cell(ratatui::layout::Position::new(x, y)).map(|c| c.symbol()), Some("◄" | "►")) {
+                if matches!(
+                    buffer
+                        .cell(ratatui::layout::Position::new(x, y))
+                        .map(|c| c.symbol()),
+                    Some("◄" | "►")
+                ) {
                     leftmost = Some(x);
                     break 'scan;
                 }
@@ -961,15 +979,26 @@ mod tests {
         // MainMenu keeps rendering, docking ship included, until the dock
         // finishes; only then does the deferred view switch go through.
         let rendered = render_to_string(&app, 120, 40);
-        assert!(rendered.contains("◄███►"), "docking ship must stay visible pre-flip:\n{rendered}");
-        assert!(rendered.contains("CIMIENTOS"), "MainMenu content must render pre-flip:\n{rendered}");
+        assert!(
+            rendered.contains("◄███►"),
+            "docking ship must stay visible pre-flip:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("CIMIENTOS"),
+            "MainMenu content must render pre-flip:\n{rendered}"
+        );
 
         // The dock is a real horizontal move onto the planet's lane: at
         // progress 0.5 the ship's leftmost glyph sits at ≈11 (lerp 8→14).
         let mut ship_col: Option<u16> = None;
         'scan: for y in 0..buffer.area().height {
             for x in 0..buffer.area().width {
-                if matches!(buffer.cell(ratatui::layout::Position::new(x, y)).map(|c| c.symbol()), Some("◄")) {
+                if matches!(
+                    buffer
+                        .cell(ratatui::layout::Position::new(x, y))
+                        .map(|c| c.symbol()),
+                    Some("◄")
+                ) {
                     ship_col = Some(x);
                     break 'scan;
                 }
