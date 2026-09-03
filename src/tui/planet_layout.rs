@@ -5,6 +5,7 @@
 //! an input area so the layout math can be unit tested in isolation.
 
 use crate::core::model::{Lesson, Section};
+use crate::tui::animation::ShipPhase;
 use ratatui::layout::{Constraint, Direction, Layout, Position, Rect};
 
 /// Minimum terminal width (in columns) required to render the full galaxy
@@ -135,6 +136,67 @@ pub fn ship_rect(gutter: Rect, cards: &[Rect], pos: f32, sprite_h: u16) -> Rect 
     let final_y = candidate_y.clamp(gutter.y, max_top);
 
     Rect::new(gutter.x, final_y, gutter.width, clamped_height)
+}
+
+/// Width (in columns) of the planet sprite lane inside each Full-mode card.
+/// The ship parks at the lane edge (`card.x`) when idle and docks toward the
+/// lane core (`card.x + SPRITE_LANE_WIDTH / 2`) when descending.
+pub const SPRITE_LANE_WIDTH: u16 = 12;
+
+/// Left-hand sprite lane of a Full-mode planet card. `sprite_lane ∪
+/// info_column` tiles the card exactly — no overlap, no gap — via inline
+/// Rect math (deliberately not nested `Layout`, which can leave rounding
+/// gaps).
+pub fn sprite_lane(card: Rect) -> Rect {
+    let w = SPRITE_LANE_WIDTH.min(card.width);
+    Rect::new(card.x, card.y, w, card.height)
+}
+
+/// Right-hand info column of a Full-mode planet card. Degrades to a
+/// zero-width slice under a `SPRITE_LANE_WIDTH`-wide card, still tiling the
+/// card without overlap or gap.
+pub fn info_column(card: Rect) -> Rect {
+    let w = SPRITE_LANE_WIDTH.min(card.width);
+    Rect::new(
+        card.x.saturating_add(w),
+        card.y,
+        card.width.saturating_sub(w),
+        card.height,
+    )
+}
+
+/// Horizontal x (ship sprite left edge) of the 2-D voyage. All 7 cards share
+/// the same x, so while [`ShipPhase::Idle`]/[`ShipPhase::Traveling`] the
+/// column is constant at the target's lane entry (`card.x`); the dock is the
+/// real horizontal move onto the planet: [`ShipPhase::Descending`] lerps
+/// lane entry → lane core by `dock_depth`, [`ShipPhase::Ascending`] reverses
+/// it. Never panics: empty cards fall back into the gutter, and an
+/// out-of-range target clamps to the last card.
+pub fn ship_x(
+    gutter: Rect,
+    cards: &[Rect],
+    pos: f32,
+    target: usize,
+    phase: ShipPhase,
+    dock_depth: f32,
+) -> f32 {
+    let Some(card) = cards.get(target.min(cards.len().saturating_sub(1))) else {
+        // Degenerate layout: nothing to park against. Track `pos` across the
+        // gutter so the fallback stays finite and on-screen.
+        let t = if pos.is_finite() {
+            pos.clamp(0.0, (PLANET_COUNT - 1) as f32) / (PLANET_COUNT - 1) as f32
+        } else {
+            0.0
+        };
+        return gutter.x as f32 + t * gutter.width as f32;
+    };
+    let lane_entry = card.x as f32;
+    let lane_core = lane_entry + SPRITE_LANE_WIDTH as f32 / 2.0;
+    match phase {
+        ShipPhase::Idle | ShipPhase::Traveling => lane_entry,
+        ShipPhase::Descending => lane_entry + (lane_core - lane_entry) * dock_depth,
+        ShipPhase::Ascending => lane_core + (lane_entry - lane_core) * dock_depth,
+    }
 }
 
 /// One row of the planet lesson list: either a non-selectable section
@@ -474,5 +536,77 @@ mod tests {
             "pos 0.5 within 1 cell of the card 0/1 midpoint"
         );
         assert!(in_gutter(rect_half), "rect={rect_half:?} gutter={gutter:?}");
+    }
+
+    #[test]
+    fn test_sprite_lane_info_column_partition() {
+        let card = Rect::new(0, 0, 66, 3);
+        assert_eq!(sprite_lane(card), Rect::new(0, 0, 12, 3));
+        assert_eq!(info_column(card), Rect::new(12, 0, 54, 3));
+        // The two columns must tile the card exactly: no overlap, no gap.
+        assert_eq!(sprite_lane(card).x + sprite_lane(card).width, info_column(card).x);
+        assert_eq!(
+            info_column(card).x + info_column(card).width,
+            card.x + card.width,
+            "sprite lane ∪ info column must cover the whole card"
+        );
+
+        // Off-origin cards keep the partition anchored to the card rect.
+        let off_card = Rect::new(5, 7, 30, 3);
+        assert_eq!(sprite_lane(off_card), Rect::new(5, 7, 12, 3));
+        assert_eq!(info_column(off_card), Rect::new(17, 7, 18, 3));
+
+        // Narrower than the lane: the lane clamps, info degrades to a
+        // zero-width slice — still no overlap and no gap.
+        let narrow = Rect::new(3, 1, 7, 3);
+        assert_eq!(sprite_lane(narrow), Rect::new(3, 1, 7, 3));
+        assert_eq!(info_column(narrow), Rect::new(10, 1, 0, 3));
+        assert_eq!(sprite_lane(narrow).x + sprite_lane(narrow).width, info_column(narrow).x);
+    }
+
+    #[test]
+    fn test_ship_x_voyage_by_phase() {
+        let area = Rect::new(0, 0, 120, 40);
+        let gutter = ship_gutter(area);
+        let cards = planet_layout(area);
+        let entry = cards[2].x as f32;
+        let core = entry + SPRITE_LANE_WIDTH as f32 / 2.0;
+        let x = |pos, target, phase, depth| ship_x(gutter, &cards, pos, target, phase, depth);
+
+        // Idle and Traveling park at the target's lane entry (= card.x), no
+        // matter how far into the flight `pos` is.
+        for phase in [ShipPhase::Idle, ShipPhase::Traveling] {
+            for pos in [0.0, 2.5, 5.9] {
+                assert_eq!(x(pos, 2, phase, 0.0), entry, "phase {phase:?} pos {pos}");
+            }
+        }
+
+        // Descending lerps lane entry → lane core (~+6 cells) by dock_depth.
+        assert_eq!(x(2.0, 2, ShipPhase::Descending, 0.0), entry);
+        assert!((x(2.0, 2, ShipPhase::Descending, 0.5) - (entry + (core - entry) * 0.5)).abs() < 1e-4);
+        assert!((x(2.0, 2, ShipPhase::Descending, 1.0) - core).abs() < 1e-4, "docked ≈ +6 cells");
+
+        // Ascending lerps lane core → lane entry by dock_depth.
+        assert!((x(2.0, 2, ShipPhase::Ascending, 0.0) - core).abs() < 1e-4);
+        assert_eq!(x(2.0, 2, ShipPhase::Ascending, 1.0), entry);
+
+        // Retarget continuity: the x stays pinned to the retargeted target's
+        // lane entry mid-flight (shared card x → no column jump possible).
+        assert_eq!(x(2.3, 5, ShipPhase::Traveling, 0.0), cards[5].x as f32);
+
+        // Out-of-range target falls back to the last card — no panic.
+        assert_eq!(x(6.0, 99, ShipPhase::Idle, 0.0), cards[6].x as f32);
+    }
+
+    #[test]
+    fn test_ship_x_degenerate_no_panic() {
+        let area = Rect::new(0, 0, 120, 40);
+        let gutter = ship_gutter(area);
+        let empty: Vec<Rect> = Vec::new();
+        for phase in [ShipPhase::Idle, ShipPhase::Traveling, ShipPhase::Descending, ShipPhase::Ascending] {
+            let v = ship_x(gutter, &empty, 0.0, 0, phase, 0.5);
+            assert!(v.is_finite(), "phase {phase:?} must return a finite x");
+            assert!(v >= gutter.x as f32, "phase {phase:?} degenerate fallback stays at/right of the gutter");
+        }
     }
 }
