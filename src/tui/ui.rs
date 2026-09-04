@@ -822,6 +822,40 @@ mod tests {
     }
 
     #[test]
+    fn test_selected_planet_card_shows_marker_and_bold() {
+        let mut app = App::new();
+        app.user_progress = UserProgress::default();
+        app.selected_planet_index = 0;
+        let backend = TestBackend::new(120, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| render(f, &app)).unwrap();
+        let buffer = terminal.backend().buffer();
+        let map = map_body_area(Rect::new(0, 0, 120, 40));
+        let cards = planet_layout(map);
+        let sel_info = info_column(cards[0]);
+        let sel_symbols = rect_symbols(buffer, sel_info);
+        assert!(
+            sel_symbols.contains("▶ CIMIENTOS"),
+            "selected card's info column must open with the marker:\n{sel_symbols}"
+        );
+        let marker = buffer
+            .cell(ratatui::layout::Position::new(sel_info.x, sel_info.y))
+            .expect("selected info column origin must carry the marker cell");
+        assert!(
+            marker.symbol() == "▶" && marker.style().add_modifier.contains(Modifier::BOLD),
+            "selected row's marker/name must be '▶' and BOLD: {:?}",
+            marker.style()
+        );
+        for (i, card) in cards.iter().enumerate().skip(1) {
+            let symbols = rect_symbols(buffer, info_column(*card));
+            assert!(
+                !symbols.contains('▶'),
+                "unselected card {i} must not carry the marker:\n{symbols}"
+            );
+        }
+    }
+
+    #[test]
     fn test_render_ship_in_lane_during_travel() {
         let mut app = App::new();
         app.user_progress = UserProgress::default();
