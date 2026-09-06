@@ -44,7 +44,17 @@ pub struct App {
 
 impl App {
     pub fn new() -> Self {
-        let repository = ProgressRepository::new();
+        Self::with_repository(ProgressRepository::new())
+    }
+
+    /// Test seam: builds an `App` around a caller-supplied `repository`
+    /// instead of `ProgressRepository::new()`'s real XDG-resolved path.
+    /// `App::new()` hardcodes that real path, so any `App`-level
+    /// persistence assertion built on it would write to the developer's
+    /// actual `progress.json` — this constructor exists specifically so
+    /// tests can point at a `tempfile` directory instead (design's Testing
+    /// Strategy: mandatory prerequisite, not optional).
+    pub fn with_repository(repository: ProgressRepository) -> Self {
         let user_progress = repository.load();
         let tts_speaker = SystemTtsSpeaker::new();
         let selected_planet_index = user_progress.unlocked_tier.index();
@@ -151,11 +161,6 @@ impl App {
             let metrics = engine.current_metrics();
             let passed = MetricsCalculator::meets_progression_gate(&metrics, &engine.lesson.tier);
 
-            // Kind selection stays unconditionally `Lesson` in this slice.
-            // The adaptive-drill branch (routing on
-            // `engine.lesson.id == Curriculum::ADAPTIVE_DRILL_ID`) is a
-            // later slice's scope, so today's drill-pollution bug
-            // deliberately survives here.
             let summary = SessionSummary {
                 cpm: metrics.cpm,
                 raw_wpm: metrics.raw_wpm,
@@ -166,10 +171,22 @@ impl App {
                 correct_keystrokes: metrics.correct_keystrokes,
                 error_count: metrics.error_count,
             };
-            let kind = SessionKind::Lesson {
-                lesson_id: engine.lesson.id.clone(),
-                tier: engine.lesson.tier,
-                passed,
+            // An adaptive drill is absent from `available_lessons()` by
+            // construction (`Curriculum::generate_weak_key_drill`), so its
+            // id is the only signal `finish_current_session` has to tell it
+            // apart from a real curriculum lesson. Routing it as
+            // `SessionKind::Drill` here is the adaptive-drill fix: a drill
+            // structurally cannot write a `completed_lessons` entry, since
+            // `repository::record_session_result` only does that inside its
+            // `SessionKind::Lesson` arm.
+            let kind = if engine.lesson.id == Curriculum::ADAPTIVE_DRILL_ID {
+                SessionKind::Drill
+            } else {
+                SessionKind::Lesson {
+                    lesson_id: engine.lesson.id.clone(),
+                    tier: engine.lesson.tier,
+                    passed,
+                }
             };
 
             if let Ok(updated_progress) = self.repository.record_session_result(
@@ -892,6 +909,63 @@ mod tests {
         app.leave_planet_lessons();
 
         assert_eq!(app.ship.phase(), crate::tui::animation::ShipPhase::Ascending);
+    }
+
+    /// RED for task 4.2 / GREEN via tasks 4.3+4.4: an adaptive-drill pass
+    /// must not write a `completed_lessons["adaptive-drill"]` entry, but
+    /// must still append a `SessionKind::Drill` history record (spec's
+    /// "Adaptive drill pass writes no completed_lessons entry" scenario).
+    /// Uses `App::with_repository` so this persistence assertion never
+    /// touches the developer's real XDG `progress.json`.
+    #[test]
+    fn test_finish_current_session_adaptive_drill_writes_drill_record_not_completed_lessons() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = ProgressRepository::with_path(dir.path().join("progress.json"));
+        let mut app = App::with_repository(repo);
+        app.user_progress = UserProgress::default();
+
+        app.start_adaptive_drill();
+        let text = app.current_engine.as_ref().unwrap().lesson.text.clone();
+        for ch in text.chars() {
+            app.handle_key_input(ch);
+        }
+
+        assert!(!app
+            .user_progress
+            .completed_lessons
+            .contains_key(Curriculum::ADAPTIVE_DRILL_ID));
+        assert_eq!(app.user_progress.sessions.len(), 1);
+        assert!(matches!(
+            app.user_progress.sessions[0].kind,
+            SessionKind::Drill
+        ));
+    }
+
+    /// Regression guard (task 4.2): an ordinary lesson completion is
+    /// unaffected by the drill-kind branch and still writes its
+    /// `completed_lessons` entry, exactly as today.
+    #[test]
+    fn test_finish_current_session_regular_lesson_still_writes_completed_lessons() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = ProgressRepository::with_path(dir.path().join("progress.json"));
+        let mut app = App::with_repository(repo);
+        app.user_progress = UserProgress::default();
+
+        let lesson = Curriculum::find_lesson("t1-l1").expect("fixture needs t1-l1");
+        app.start_practice(lesson.clone());
+        for ch in lesson.text.chars() {
+            app.handle_key_input(ch);
+        }
+
+        assert!(app
+            .user_progress
+            .completed_lessons
+            .contains_key(&lesson.id));
+        assert_eq!(app.user_progress.sessions.len(), 1);
+        assert!(matches!(
+            app.user_progress.sessions[0].kind,
+            SessionKind::Lesson { .. }
+        ));
     }
 
     #[test]

@@ -5,6 +5,13 @@ use rand::thread_rng;
 pub struct Curriculum;
 
 impl Curriculum {
+    /// Id of the dynamically generated adaptive-drill lesson (see
+    /// [`Self::generate_weak_key_drill`]). It is absent from
+    /// [`Self::all_lessons`] by construction, which is what lets
+    /// `tui::app::App::flat_index_of` and downstream session-kind routing
+    /// tell an adaptive drill apart from a real curriculum lesson.
+    pub const ADAPTIVE_DRILL_ID: &'static str = "adaptive-drill";
+
     pub fn all_lessons() -> Vec<Lesson> {
         let mut lessons = Vec::new();
         lessons.extend(Self::tier1_lessons());
@@ -2408,7 +2415,7 @@ impl Curriculum {
         let drill_text = words.join(" ");
 
         Lesson {
-            id: "adaptive-drill".into(),
+            id: Self::ADAPTIVE_DRILL_ID.into(),
             title: "Drill Adaptativo: Teclas Débiles".into(),
             tier: Tier::Tier7GrandMaster,
             // Dynamic drills are not part of the ordered curriculum, so they
