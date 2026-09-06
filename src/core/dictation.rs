@@ -1,6 +1,6 @@
 use crate::core::engine::{EngineStatus, TypingEngine};
 use crate::core::metrics::MetricsCalculator;
-use crate::core::model::KeyStroke;
+use crate::core::model::{KeyStroke, SessionKind, SessionSummary};
 use serde::{Deserialize, Serialize};
 use std::time::{Duration, Instant};
 
@@ -66,6 +66,41 @@ pub struct DictationMetrics {
     pub total_keystrokes: usize,
     pub correct_keystrokes: usize,
     pub error_count: usize,
+}
+
+impl DictationMetrics {
+    /// Splits this dictation-specific snapshot into the shared
+    /// `SessionSummary` (design D5's eight fields overlapping
+    /// `SessionMetrics`) and the `SessionKind::Dictation` payload carrying
+    /// the reaction-time and word-count fields that have no typing-session
+    /// equivalent.
+    ///
+    /// Deliberately does **not** include `duration_secs`: `SessionSummary`
+    /// has no such field, and this struct's own basis
+    /// (`active_typing_duration`, summed per-word typing windows) is a
+    /// different clock than typing's wall-clock `elapsed` (design D0/D5).
+    /// Callers pass `active_typing_duration.as_secs()` to
+    /// `ProgressRepository::record_session_result` directly.
+    pub fn to_session_parts(&self) -> (SessionSummary, SessionKind) {
+        let summary = SessionSummary {
+            cpm: self.cpm,
+            raw_wpm: self.raw_wpm,
+            net_wpm: self.net_wpm,
+            accuracy: self.accuracy,
+            consistency: self.consistency,
+            total_keystrokes: self.total_keystrokes,
+            correct_keystrokes: self.correct_keystrokes,
+            error_count: self.error_count,
+        };
+        let kind = SessionKind::Dictation {
+            avg_reaction_time_ms: self.avg_reaction_time_ms,
+            min_reaction_time_ms: self.min_reaction_time_ms,
+            max_reaction_time_ms: self.max_reaction_time_ms,
+            total_words: self.total_words,
+            completed_words: self.completed_words,
+        };
+        (summary, kind)
+    }
 }
 
 impl Default for DictationMetrics {

@@ -477,6 +477,18 @@ impl App {
 
             if session_finished {
                 let metrics = engine.calculate_metrics();
+                let (summary, kind) = metrics.to_session_parts();
+                let duration_secs = metrics.active_typing_duration.as_secs();
+
+                if let Ok(updated_progress) = self.repository.record_session_result(
+                    kind,
+                    &summary,
+                    duration_secs,
+                    &engine.keystrokes,
+                ) {
+                    self.user_progress = updated_progress;
+                }
+
                 self.last_dictation_metrics = Some(metrics);
                 self.tts_speaker.stop();
                 self.current_view = CurrentView::DictationSummary;
@@ -966,6 +978,46 @@ mod tests {
             app.user_progress.sessions[0].kind,
             SessionKind::Lesson { .. }
         ));
+    }
+
+    /// RED for task 4.5 / GREEN via task 4.6: a completed dictation session
+    /// must append a `SessionKind::Dictation` history record and update
+    /// `key_stats` (design D0/spec: dictation feeds weak-key detection),
+    /// but must leave `total_practice_seconds` unchanged (dictation's
+    /// duration basis is `active_typing_duration`, not typing wall-clock).
+    /// Tier1 words are ASCII-only, so this drives the flow without needing
+    /// dead-key composition.
+    #[test]
+    fn test_dictation_completion_appends_record_updates_key_stats_leaves_practice_seconds_unchanged(
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = ProgressRepository::with_path(dir.path().join("progress.json"));
+        let mut app = App::with_repository(repo);
+        app.user_progress = UserProgress::default();
+        let starting_practice_seconds = app.user_progress.total_practice_seconds;
+
+        app.start_dictation(Some(Tier::Tier1Foundation), Some(2));
+        let words = app.current_dictation.as_ref().unwrap().words.clone();
+        for word in &words {
+            for ch in word.chars() {
+                app.handle_dictation_key_input(ch);
+            }
+        }
+
+        assert_eq!(app.current_view, CurrentView::DictationSummary);
+        assert_eq!(app.user_progress.sessions.len(), 1);
+        assert!(matches!(
+            app.user_progress.sessions[0].kind,
+            SessionKind::Dictation { .. }
+        ));
+        assert!(
+            !app.user_progress.key_stats.is_empty(),
+            "dictation keystrokes must feed key_stats for weak-key detection"
+        );
+        assert_eq!(
+            app.user_progress.total_practice_seconds, starting_practice_seconds,
+            "dictation must not accrue typing wall-clock practice time (design D0)"
+        );
     }
 
     #[test]
