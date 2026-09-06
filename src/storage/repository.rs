@@ -1,6 +1,6 @@
 use crate::core::model::{
-    schema_v1, BestScore, KeyStroke, SessionKind, SessionRecord, SessionSummary, Tier,
-    UserProgress, SCHEMA_VERSION,
+    day_index, schema_v1, BestScore, KeyStroke, SessionBucket, SessionKind, SessionRecord,
+    SessionSummary, Tier, UserProgress, MAX_DETAILED_SESSIONS, SCHEMA_VERSION,
 };
 use serde::Deserialize;
 use std::fs;
@@ -230,8 +230,71 @@ impl ProgressRepository {
             kind,
         });
 
+        apply_retention(&mut progress);
+
         self.save(&progress)?;
         Ok(progress)
+    }
+}
+
+/// Enforces `MAX_DETAILED_SESSIONS` (design D6). Once `progress.sessions`
+/// exceeds the cap, the oldest excess records are drained from the front
+/// and merged into `progress.buckets`, keyed by `(day, kind)`. Pure and
+/// headless-testable: no I/O, no `self`.
+///
+/// **Assumption**: storage order equals `completed_at` order — records are
+/// appended oldest-first via `sessions.push` (design D7), so
+/// `drain(0..overflow)` removes the genuinely oldest records. A backward
+/// system-clock jump between two `record_session_result` calls violates
+/// this assumption and can roll up the wrong record (the one at index 0,
+/// not necessarily the one with the smallest `completed_at`). This is an
+/// accepted limitation, not a bug: lifetime totals derived from
+/// `(sessions + buckets)` remain correct regardless, because bucket merge
+/// only sums extensives — only which specific record ends up detailed vs.
+/// rolled up is affected.
+pub fn apply_retention(progress: &mut UserProgress) {
+    if progress.sessions.len() <= MAX_DETAILED_SESSIONS {
+        return;
+    }
+
+    let overflow = progress.sessions.len() - MAX_DETAILED_SESSIONS;
+    let drained: Vec<SessionRecord> = progress.sessions.drain(0..overflow).collect();
+    for record in &drained {
+        merge_into_bucket(&mut progress.buckets, record);
+    }
+}
+
+/// Merges one `SessionRecord`'s extensive fields into `buckets`, keyed by
+/// `(day_index(completed_at), kind.tag())` (design D6). Creates a new
+/// bucket on first contribution for a key; otherwise sums into the
+/// existing one. Pure addition, so repeated application is order-
+/// independent and associative regardless of call order.
+fn merge_into_bucket(buckets: &mut Vec<SessionBucket>, record: &SessionRecord) {
+    let day = day_index(record.completed_at);
+    let tag = record.kind.tag();
+    let weighted_consistency = record.summary.consistency * record.summary.total_keystrokes as f64;
+
+    match buckets.iter_mut().find(|b| b.day == day && b.kind == tag) {
+        Some(bucket) => {
+            bucket.sessions += 1;
+            bucket.duration_secs += record.duration_secs;
+            bucket.total_keystrokes += record.summary.total_keystrokes;
+            bucket.correct_keystrokes += record.summary.correct_keystrokes;
+            bucket.error_count += record.summary.error_count;
+            bucket.consistency_keystroke_weighted += weighted_consistency;
+        }
+        None => {
+            buckets.push(SessionBucket {
+                day,
+                kind: tag,
+                sessions: 1,
+                duration_secs: record.duration_secs,
+                total_keystrokes: record.summary.total_keystrokes,
+                correct_keystrokes: record.summary.correct_keystrokes,
+                error_count: record.summary.error_count,
+                consistency_keystroke_weighted: weighted_consistency,
+            });
+        }
     }
 }
 
@@ -643,5 +706,160 @@ mod tests {
             }
             other => panic!("expected SessionKind::Lesson, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn test_below_retention_cap_all_sessions_stay_detailed() {
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("progress.json");
+        let repo = ProgressRepository::with_path(&file_path);
+
+        let summary = SessionSummary {
+            cpm: 100.0,
+            raw_wpm: 20.0,
+            net_wpm: 20.0,
+            accuracy: 95.0,
+            consistency: 90.0,
+            total_keystrokes: 10,
+            correct_keystrokes: 9,
+            error_count: 1,
+        };
+
+        // Well under MAX_DETAILED_SESSIONS: nothing should ever roll up.
+        let below_cap = 3;
+        assert!(below_cap < crate::core::model::MAX_DETAILED_SESSIONS);
+        let mut updated = None;
+        for _ in 0..below_cap {
+            updated = Some(
+                repo.record_session_result(SessionKind::Drill, &summary, 5, &[])
+                    .unwrap(),
+            );
+        }
+
+        let progress = updated.unwrap();
+        assert_eq!(progress.sessions.len(), below_cap);
+        assert!(progress.buckets.is_empty());
+    }
+
+    /// Builds a minimal, cheaply-distinguishable `SessionRecord` for
+    /// retention/roll-up tests. `completed_at` is monotonically increasing
+    /// with the given index, matching the storage-order assumption
+    /// documented on `apply_retention`.
+    fn make_session_record(index: u64) -> SessionRecord {
+        SessionRecord {
+            completed_at: 1_700_000_000 + index,
+            duration_secs: 10,
+            summary: SessionSummary {
+                cpm: 100.0,
+                raw_wpm: 20.0,
+                net_wpm: 20.0,
+                accuracy: 95.0,
+                consistency: 90.0,
+                total_keystrokes: 5,
+                correct_keystrokes: 4,
+                error_count: 1,
+            },
+            kind: SessionKind::Drill,
+        }
+    }
+
+    #[test]
+    fn test_crossing_cap_collapses_oldest_record_via_drain_into_day_kind_bucket() {
+        // `apply_retention` assumes storage order equals `completed_at`
+        // order (records are appended oldest-first, per D7): the test
+        // builds `progress.sessions` in that exact order, index 0 being the
+        // genuinely oldest record, matching what `drain(0..overflow)`
+        // expects. A backward system-clock jump between two
+        // `record_session_result` calls would violate this assumption and
+        // roll up the wrong record — an accepted limitation (design D6
+        // amendment 2), not a bug: lifetime totals stay correct regardless,
+        // since bucket merge only sums extensives.
+        let mut progress = UserProgress::default();
+        for i in 0..(crate::core::model::MAX_DETAILED_SESSIONS as u64 + 1) {
+            progress.sessions.push(make_session_record(i));
+        }
+
+        apply_retention(&mut progress);
+
+        assert_eq!(progress.sessions.len(), crate::core::model::MAX_DETAILED_SESSIONS);
+        // The oldest record (index 0, completed_at 1_700_000_000) is gone
+        // from the detail set; the next-oldest (index 1) is now the first.
+        assert_eq!(progress.sessions[0].completed_at, 1_700_000_001);
+        assert_eq!(progress.buckets.len(), 1);
+        let bucket = &progress.buckets[0];
+        assert_eq!(bucket.day, crate::core::model::day_index(1_700_000_000));
+        assert_eq!(bucket.kind, crate::core::model::SessionKindTag::Drill);
+        assert_eq!(bucket.sessions, 1);
+        assert_eq!(bucket.duration_secs, 10);
+        assert_eq!(bucket.total_keystrokes, 5);
+        assert_eq!(bucket.correct_keystrokes, 4);
+        assert_eq!(bucket.error_count, 1);
+        assert_eq!(bucket.consistency_keystroke_weighted, 90.0 * 5.0);
+    }
+
+    #[test]
+    fn test_lifetime_totals_survive_roll_up() {
+        let overflow = 5;
+        let total_records = crate::core::model::MAX_DETAILED_SESSIONS as u64 + overflow;
+        let mut progress = UserProgress::default();
+        for i in 0..total_records {
+            progress.sessions.push(make_session_record(i));
+        }
+
+        let expected_keystrokes: usize = progress
+            .sessions
+            .iter()
+            .map(|r| r.summary.total_keystrokes)
+            .sum();
+        let expected_duration: u64 = progress.sessions.iter().map(|r| r.duration_secs).sum();
+
+        apply_retention(&mut progress);
+
+        let detail_keystrokes: usize = progress
+            .sessions
+            .iter()
+            .map(|r| r.summary.total_keystrokes)
+            .sum();
+        let bucket_keystrokes: usize = progress.buckets.iter().map(|b| b.total_keystrokes).sum();
+        assert_eq!(detail_keystrokes + bucket_keystrokes, expected_keystrokes);
+
+        let detail_duration: u64 = progress.sessions.iter().map(|r| r.duration_secs).sum();
+        let bucket_duration: u64 = progress.buckets.iter().map(|b| b.duration_secs).sum();
+        assert_eq!(detail_duration + bucket_duration, expected_duration);
+    }
+
+    #[test]
+    fn test_bucket_merge_is_order_independent_and_associative() {
+        // All five records fall on the same day and kind, so they all merge
+        // into one bucket regardless of merge order.
+        let records: Vec<SessionRecord> = (0..5).map(make_session_record).collect();
+
+        let mut forward: Vec<SessionBucket> = Vec::new();
+        for record in &records {
+            merge_into_bucket(&mut forward, record);
+        }
+
+        let mut reversed: Vec<SessionBucket> = Vec::new();
+        for record in records.iter().rev() {
+            merge_into_bucket(&mut reversed, record);
+        }
+
+        // Associativity: merging [0,1,2] then [3,4] as two separate groups,
+        // then combining those two bucket sets, equals merging all five at
+        // once (there being only one bucket key here, "combining" two
+        // partial bucket sets is itself an application of merge_into_bucket
+        // for each partial bucket's constituent records).
+        let mut grouped: Vec<SessionBucket> = Vec::new();
+        for record in &records[0..3] {
+            merge_into_bucket(&mut grouped, record);
+        }
+        for record in &records[3..5] {
+            merge_into_bucket(&mut grouped, record);
+        }
+
+        assert_eq!(forward, reversed);
+        assert_eq!(forward, grouped);
+        assert_eq!(forward.len(), 1);
+        assert_eq!(forward[0].sessions, 5);
     }
 }

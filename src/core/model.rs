@@ -265,6 +265,67 @@ pub struct SessionRecord {
     pub kind: SessionKind,
 }
 
+/// Detailed-record retention cap (design D6). Once
+/// `UserProgress::sessions` exceeds this count, the oldest excess records
+/// collapse into `UserProgress::buckets` — see
+/// `storage::repository::apply_retention`.
+pub const MAX_DETAILED_SESSIONS: usize = 50;
+
+/// Seconds in a day. Never inlined at call sites — always reached through
+/// [`day_index`] (design D6).
+pub const SECONDS_PER_DAY: u64 = 86_400;
+
+/// Day index for a `completed_at` Unix timestamp, in **UTC** (design D6).
+///
+/// This is a knowing approximation for this app's `es_AR` (UTC-3) audience:
+/// `Cargo.toml` carries no timezone crate, and adding one for a single
+/// divisor is disproportionate — std has no timezone support at all, and
+/// per-thread local-offset lookups are unreliable in a process that also
+/// runs a TTS speaker. A session after 21:00 local time lands in the next
+/// UTC day's bucket. The error is bounded to one bin boundary and does not
+/// affect lifetime totals (bucket merge is additive and order-independent);
+/// buckets are aggregate bins, never displayed as calendar dates. This
+/// function is the single seam to change if a future timezone-aware fix is
+/// needed.
+pub fn day_index(completed_at: u64) -> u64 {
+    completed_at / SECONDS_PER_DAY
+}
+
+/// A `(day, kind)`-bucketed aggregate roll-up of collapsed
+/// [`SessionRecord`]s (design D6). Keyed by day **and** kind, never by day
+/// alone: typing measures wall-clock `elapsed` while dictation measures
+/// `active_typing_duration`, so summing `duration_secs` across kinds would
+/// produce a basis-mixed rate. A combined lifetime CPM must never be
+/// computed from this struct.
+///
+/// Stores only additively-composable extensives so lifetime rates are
+/// derived exactly rather than averaged, with one deliberate exception:
+/// `consistency_keystroke_weighted` is a keystroke-weighted sum of a
+/// normalized latency std-dev, which is not itself extensive. The derived
+/// mean (`consistency_keystroke_weighted / total_keystrokes`) is an
+/// approximation of the true pooled value, not an exact figure — this is
+/// the single lossy field in the design.
+///
+/// Deliberately does **not** derive `Default`: nothing constructs an empty
+/// `SessionBucket` (unlike `Vec<SessionBucket>`, which only needs `Vec`'s
+/// own `Default`), so a derived `Default` would be unused surface area with
+/// the same silent-divergence risk design D5 rejected for `SessionSummary`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SessionBucket {
+    /// `day_index(completed_at)` of every record merged into this bucket.
+    pub day: u64,
+    /// The bucket merge key's kind half (design D6).
+    pub kind: SessionKindTag,
+    pub sessions: usize,
+    pub duration_secs: u64,
+    pub total_keystrokes: usize,
+    pub correct_keystrokes: usize,
+    pub error_count: usize,
+    /// Lossy: `Σ(consistency × total_keystrokes)`. Mean =
+    /// this ÷ `total_keystrokes`. See the struct doc comment.
+    pub consistency_keystroke_weighted: f64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UserProgress {
     #[serde(default = "schema_v1")]
@@ -278,6 +339,11 @@ pub struct UserProgress {
     /// relying on storage order (introduced in a later slice).
     #[serde(default)]
     pub sessions: Vec<SessionRecord>,
+    /// Aggregate roll-up of session records collapsed past
+    /// `MAX_DETAILED_SESSIONS`, keyed by `(day, kind)` (design D6). See
+    /// `storage::repository::apply_retention`.
+    #[serde(default)]
+    pub buckets: Vec<SessionBucket>,
     /// Set when `ProgressRepository::load()` recovered from a corrupt file
     /// but could not quarantine it (e.g. read-only directory). Never
     /// persisted: a load-status flag on a domain struct is a deliberate,
@@ -297,6 +363,7 @@ impl Default for UserProgress {
             total_practice_seconds: 0,
             key_stats: HashMap::new(),
             sessions: Vec::new(),
+            buckets: Vec::new(),
             load_degraded: false,
         }
     }
@@ -312,6 +379,28 @@ impl UserProgress {
         if self.version < SCHEMA_VERSION {
             self.version = SCHEMA_VERSION;
         }
+    }
+
+    /// Detailed records ordered by `completed_at` descending (design D7 —
+    /// spec ordering requirement). Storage order is oldest-first because
+    /// `storage::repository::apply_retention` drains the front of
+    /// `sessions`, so this accessor is where descending order actually
+    /// happens, via a **stable sort** — not a raw reverse of storage order.
+    /// A raw reverse would only coincidentally match `completed_at` order;
+    /// this holds even under a backward system-clock jump between two
+    /// sessions.
+    ///
+    /// Tiebreak: when two records share the same `completed_at` (e.g. two
+    /// sessions completing within the same second), the more recently
+    /// appended of the two sorts first. This falls out of first iterating
+    /// `sessions` in reverse (most-recently-appended first) and then
+    /// stable-sorting by `completed_at` descending: a stable sort preserves
+    /// the relative order of equal keys from its input, so ties keep the
+    /// most-recently-appended-first order set up by the initial reverse.
+    pub fn sessions_recent_first(&self) -> Vec<&SessionRecord> {
+        let mut ordered: Vec<&SessionRecord> = self.sessions.iter().rev().collect();
+        ordered.sort_by_key(|record| std::cmp::Reverse(record.completed_at));
+        ordered
     }
 }
 
@@ -582,6 +671,61 @@ mod tests {
         assert_eq!(restored.sessions[0].kind, progress.sessions[0].kind);
         assert_eq!(restored.sessions[0].duration_secs, 42);
         assert_eq!(restored.sessions[0].completed_at, 1_700_000_000);
+    }
+
+    fn make_session_record(completed_at: u64) -> SessionRecord {
+        SessionRecord {
+            completed_at,
+            duration_secs: 10,
+            summary: SessionSummary {
+                cpm: 100.0,
+                raw_wpm: 20.0,
+                net_wpm: 20.0,
+                accuracy: 95.0,
+                consistency: 90.0,
+                total_keystrokes: 5,
+                correct_keystrokes: 4,
+                error_count: 1,
+            },
+            kind: SessionKind::Drill,
+        }
+    }
+
+    #[test]
+    fn test_sessions_recent_first_orders_by_completed_at_desc_under_backward_clock_jump() {
+        let mut progress = UserProgress::default();
+        // Appended in storage (oldest-first) order, but the third push has a
+        // *smaller* completed_at than the second — a backward clock jump.
+        // The DESC read-time ordering must still reflect true completed_at
+        // order, not storage/append order.
+        progress.sessions.push(make_session_record(100));
+        progress.sessions.push(make_session_record(300));
+        progress.sessions.push(make_session_record(200));
+
+        let ordered = progress.sessions_recent_first();
+
+        let timestamps: Vec<u64> = ordered.iter().map(|r| r.completed_at).collect();
+        assert_eq!(timestamps, vec![300, 200, 100]);
+    }
+
+    #[test]
+    fn test_sessions_recent_first_tiebreaks_equal_completed_at_by_reverse_insertion_order() {
+        let mut progress = UserProgress::default();
+        // Two records complete within the same second (equal completed_at).
+        // The tiebreak is reverse insertion order: the more recently
+        // appended of the two (the second push) sorts first.
+        progress.sessions.push(make_session_record(500));
+        progress.sessions.push(make_session_record(500));
+        progress.sessions.push(make_session_record(500));
+
+        let ordered = progress.sessions_recent_first();
+
+        // All three share completed_at, so the only distinguishing signal
+        // is which physical record (by identity) sorted where. Verify via
+        // pointer identity against the original storage-order slice.
+        assert!(std::ptr::eq(ordered[0], &progress.sessions[2]));
+        assert!(std::ptr::eq(ordered[1], &progress.sessions[1]));
+        assert!(std::ptr::eq(ordered[2], &progress.sessions[0]));
     }
 
     #[test]

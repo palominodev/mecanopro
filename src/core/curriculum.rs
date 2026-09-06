@@ -2515,6 +2515,7 @@ mod tests {
             total_practice_seconds: 0,
             key_stats: HashMap::new(),
             sessions: Vec::new(),
+            buckets: Vec::new(),
             load_degraded: false,
         };
 
