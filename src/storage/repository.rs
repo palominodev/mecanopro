@@ -418,6 +418,35 @@ mod tests {
         assert_eq!(fs::read_to_string(&file_path).unwrap(), original);
     }
 
+    /// Spec scenario "New write carries current version" (progress-persistence
+    /// domain): every persisted write must carry `SCHEMA_VERSION`, even when
+    /// the in-memory `UserProgress.version` disagrees. Drives `save()`
+    /// directly against a stale in-memory version, then re-reads the raw
+    /// on-disk JSON (not through `load()`, which would re-migrate it) to
+    /// assert the *persisted* field, not merely the in-memory one.
+    #[test]
+    fn test_save_clamps_written_version_to_schema_version_regardless_of_in_memory_value() {
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("progress.json");
+        let repo = ProgressRepository::with_path(&file_path);
+
+        let stale = UserProgress {
+            version: 999,
+            ..UserProgress::default()
+        };
+
+        let result = repo.save(&stale);
+        assert!(result.is_ok());
+
+        let raw = fs::read_to_string(&file_path).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(
+            parsed["version"],
+            serde_json::json!(crate::core::model::SCHEMA_VERSION),
+            "on-disk version must be clamped to SCHEMA_VERSION, not the stale in-memory value"
+        );
+    }
+
     #[test]
     fn test_corrupt_file_is_quarantined_then_default_returned() {
         let dir = tempdir().unwrap();
