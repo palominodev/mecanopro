@@ -3,7 +3,7 @@ use crate::core::curriculum::Curriculum;
 use crate::core::dictation::{DictationConfig, DictationEngine, DictationMetrics};
 use crate::core::engine::TypingEngine;
 use crate::core::metrics::MetricsCalculator;
-use crate::core::model::{Lesson, SessionMetrics, Tier, UserProgress};
+use crate::core::model::{Lesson, SessionKind, SessionMetrics, SessionSummary, Tier, UserProgress};
 use crate::storage::ProgressRepository;
 use crate::tui::animation::ShipAnimation;
 use crate::tui::planet_layout::{build_rows, MenuRow};
@@ -151,11 +151,31 @@ impl App {
             let metrics = engine.current_metrics();
             let passed = MetricsCalculator::meets_progression_gate(&metrics, &engine.lesson.tier);
 
-            if let Ok(updated_progress) = self.repository.record_session_result(
-                &engine.lesson.id,
-                &metrics,
-                engine.lesson.tier,
+            // Kind selection stays unconditionally `Lesson` in this slice.
+            // The adaptive-drill branch (routing on
+            // `engine.lesson.id == Curriculum::ADAPTIVE_DRILL_ID`) is a
+            // later slice's scope, so today's drill-pollution bug
+            // deliberately survives here.
+            let summary = SessionSummary {
+                cpm: metrics.cpm,
+                raw_wpm: metrics.raw_wpm,
+                net_wpm: metrics.net_wpm,
+                accuracy: metrics.accuracy,
+                consistency: metrics.consistency,
+                total_keystrokes: metrics.total_keystrokes,
+                correct_keystrokes: metrics.correct_keystrokes,
+                error_count: metrics.error_count,
+            };
+            let kind = SessionKind::Lesson {
+                lesson_id: engine.lesson.id.clone(),
+                tier: engine.lesson.tier,
                 passed,
+            };
+
+            if let Ok(updated_progress) = self.repository.record_session_result(
+                kind,
+                &summary,
+                metrics.elapsed.as_secs(),
                 &engine.keystrokes,
             ) {
                 self.user_progress = updated_progress;

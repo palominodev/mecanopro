@@ -1,7 +1,7 @@
 use mecanopro::core::curriculum::Curriculum;
 use mecanopro::core::engine::TypingEngine;
 use mecanopro::core::metrics::MetricsCalculator;
-use mecanopro::core::model::Tier;
+use mecanopro::core::model::{SessionKind, SessionSummary, Tier};
 use mecanopro::storage::ProgressRepository;
 use std::time::{Duration, Instant};
 use tempfile::tempdir;
@@ -34,8 +34,24 @@ fn test_end_to_end_spanish_typing_session() {
     let repo_path = dir.path().join("progress.json");
     let repo = ProgressRepository::with_path(repo_path);
 
+    let summary = SessionSummary {
+        cpm: metrics.cpm,
+        raw_wpm: metrics.raw_wpm,
+        net_wpm: metrics.net_wpm,
+        accuracy: metrics.accuracy,
+        consistency: metrics.consistency,
+        total_keystrokes: metrics.total_keystrokes,
+        correct_keystrokes: metrics.correct_keystrokes,
+        error_count: metrics.error_count,
+    };
+    let kind = SessionKind::Lesson {
+        lesson_id: lesson.id.clone(),
+        tier: lesson.tier,
+        passed,
+    };
+
     let updated_progress = repo
-        .record_session_result(&lesson.id, &metrics, lesson.tier, passed, &engine.keystrokes)
+        .record_session_result(kind, &summary, metrics.elapsed.as_secs(), &engine.keystrokes)
         .expect("Recording session must succeed");
 
     assert_eq!(updated_progress.completed_lessons.len(), 1);

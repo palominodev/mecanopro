@@ -2514,6 +2514,7 @@ mod tests {
             unlocked_tier: Tier::Tier1Foundation,
             total_practice_seconds: 0,
             key_stats: HashMap::new(),
+            sessions: Vec::new(),
             load_degraded: false,
         };
 

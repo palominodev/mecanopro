@@ -1,5 +1,6 @@
 use crate::core::model::{
-    schema_v1, BestScore, KeyStroke, SessionMetrics, Tier, UserProgress, SCHEMA_VERSION,
+    schema_v1, BestScore, KeyStroke, SessionKind, SessionRecord, SessionSummary, Tier,
+    UserProgress, SCHEMA_VERSION,
 };
 use serde::Deserialize;
 use std::fs;
@@ -150,10 +151,9 @@ impl ProgressRepository {
 
     pub fn record_session_result(
         &self,
-        lesson_id: &str,
-        metrics: &SessionMetrics,
-        tier: Tier,
-        passed: bool,
+        kind: SessionKind,
+        summary: &SessionSummary,
+        duration_secs: u64,
         keystrokes: &[KeyStroke],
     ) -> std::io::Result<UserProgress> {
         let mut progress = self.load();
@@ -163,25 +163,45 @@ impl ProgressRepository {
             .unwrap_or_default()
             .as_secs();
 
-        let existing = progress.completed_lessons.get(lesson_id);
-        let should_update = match existing {
-            Some(prev) => (passed && !prev.passed) || (passed && metrics.cpm > prev.cpm),
-            None => true,
-        };
+        // completed_lessons and tier unlock are Lesson-only: a Drill or a
+        // Dictation session structurally cannot write a BestScore or
+        // advance the tier frontier.
+        if let SessionKind::Lesson {
+            lesson_id,
+            tier,
+            passed,
+        } = &kind
+        {
+            let existing = progress.completed_lessons.get(lesson_id.as_str());
+            let should_update = match existing {
+                Some(prev) => (*passed && !prev.passed) || (*passed && summary.cpm > prev.cpm),
+                None => true,
+            };
 
-        if should_update {
-            progress.completed_lessons.insert(
-                lesson_id.to_string(),
-                BestScore {
-                    cpm: metrics.cpm,
-                    accuracy: metrics.accuracy,
-                    completed_at: now_unix,
-                    passed,
-                },
-            );
+            if should_update {
+                progress.completed_lessons.insert(
+                    lesson_id.clone(),
+                    BestScore {
+                        cpm: summary.cpm,
+                        accuracy: summary.accuracy,
+                        completed_at: now_unix,
+                        passed: *passed,
+                    },
+                );
+            }
+
+            if *passed {
+                progress.unlocked_tier = match (progress.unlocked_tier, *tier) {
+                    (Tier::Tier1Foundation, Tier::Tier1Foundation) => Tier::Tier2FullAlphabet,
+                    (Tier::Tier2FullAlphabet, Tier::Tier2FullAlphabet) => Tier::Tier3SpanishOrthography,
+                    (Tier::Tier3SpanishOrthography, Tier::Tier3SpanishOrthography) => Tier::Tier4NumbersAndSymbols,
+                    (Tier::Tier4NumbersAndSymbols, Tier::Tier4NumbersAndSymbols) => Tier::Tier5SpeedAndCadence,
+                    (Tier::Tier5SpeedAndCadence, Tier::Tier5SpeedAndCadence) => Tier::Tier6AdvancedFluency,
+                    (Tier::Tier6AdvancedFluency, Tier::Tier6AdvancedFluency) => Tier::Tier7GrandMaster,
+                    (current, _) => current,
+                };
+            }
         }
-
-        progress.total_practice_seconds += metrics.elapsed.as_secs();
 
         for stroke in keystrokes {
             let stat = progress.key_stats.entry(stroke.expected).or_default();
@@ -192,17 +212,23 @@ impl ProgressRepository {
             stat.total_latency_ms += stroke.latency.as_millis() as u64;
         }
 
-        if passed {
-            progress.unlocked_tier = match (progress.unlocked_tier, tier) {
-                (Tier::Tier1Foundation, Tier::Tier1Foundation) => Tier::Tier2FullAlphabet,
-                (Tier::Tier2FullAlphabet, Tier::Tier2FullAlphabet) => Tier::Tier3SpanishOrthography,
-                (Tier::Tier3SpanishOrthography, Tier::Tier3SpanishOrthography) => Tier::Tier4NumbersAndSymbols,
-                (Tier::Tier4NumbersAndSymbols, Tier::Tier4NumbersAndSymbols) => Tier::Tier5SpeedAndCadence,
-                (Tier::Tier5SpeedAndCadence, Tier::Tier5SpeedAndCadence) => Tier::Tier6AdvancedFluency,
-                (Tier::Tier6AdvancedFluency, Tier::Tier6AdvancedFluency) => Tier::Tier7GrandMaster,
-                (current, _) => current,
-            };
+        // total_practice_seconds is typing wall-clock only (design D0):
+        // Lesson/Drill accrue, Dictation does not. Exhaustive on purpose —
+        // no wildcard arm — so a future SessionKind variant forces this
+        // clock-basis question to be answered explicitly.
+        match &kind {
+            SessionKind::Lesson { .. } | SessionKind::Drill => {
+                progress.total_practice_seconds += duration_secs;
+            }
+            SessionKind::Dictation { .. } => {}
         }
+
+        progress.sessions.push(SessionRecord {
+            completed_at: now_unix,
+            duration_secs,
+            summary: summary.clone(),
+            kind,
+        });
 
         self.save(&progress)?;
         Ok(progress)
@@ -218,7 +244,6 @@ impl Default for ProgressRepository {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Duration;
     use tempfile::tempdir;
 
     #[test]
@@ -457,7 +482,7 @@ mod tests {
         }
 
         let repo = ProgressRepository::with_path(&file_path);
-        let metrics = SessionMetrics {
+        let summary = SessionSummary {
             cpm: 100.0,
             raw_wpm: 20.0,
             net_wpm: 20.0,
@@ -466,14 +491,17 @@ mod tests {
             total_keystrokes: 10,
             correct_keystrokes: 9,
             error_count: 1,
-            elapsed: Duration::from_secs(5),
+        };
+        let kind = SessionKind::Lesson {
+            lesson_id: "t1-l1".to_string(),
+            tier: Tier::Tier1Foundation,
+            passed: true,
         };
 
         // Drive the full record_session_result path (load -> mutate -> save),
         // not save() directly: this is the entry point actually used at
         // app.rs's session-completion call sites.
-        let result =
-            repo.record_session_result("t1-l1", &metrics, Tier::Tier1Foundation, true, &[]);
+        let result = repo.record_session_result(kind, &summary, 5, &[]);
         restore_writable();
 
         assert!(result.is_err());
@@ -545,7 +573,7 @@ mod tests {
         assert_eq!(initial.completed_lessons.len(), 0);
         assert_eq!(initial.unlocked_tier, Tier::Tier1Foundation);
 
-        let metrics = SessionMetrics {
+        let summary = SessionSummary {
             cpm: 155.0,
             raw_wpm: 31.0,
             net_wpm: 31.0,
@@ -554,11 +582,15 @@ mod tests {
             total_keystrokes: 100,
             correct_keystrokes: 98,
             error_count: 2,
-            elapsed: Duration::from_secs(38),
+        };
+        let kind = SessionKind::Lesson {
+            lesson_id: "t1-l1".to_string(),
+            tier: Tier::Tier1Foundation,
+            passed: true,
         };
 
         let updated = repo
-            .record_session_result("t1-l1", &metrics, Tier::Tier1Foundation, true, &[])
+            .record_session_result(kind, &summary, 38, &[])
             .unwrap();
 
         assert_eq!(updated.completed_lessons.len(), 1);
@@ -568,5 +600,48 @@ mod tests {
         let reloaded = repo.load();
         assert_eq!(reloaded.completed_lessons.len(), 1);
         assert_eq!(reloaded.unlocked_tier, Tier::Tier2FullAlphabet);
+    }
+
+    #[test]
+    fn test_record_session_result_appends_lesson_session_record_on_pass() {
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("progress.json");
+        let repo = ProgressRepository::with_path(&file_path);
+
+        let summary = SessionSummary {
+            cpm: 155.0,
+            raw_wpm: 31.0,
+            net_wpm: 31.0,
+            accuracy: 98.5,
+            consistency: 92.0,
+            total_keystrokes: 100,
+            correct_keystrokes: 98,
+            error_count: 2,
+        };
+        let kind = SessionKind::Lesson {
+            lesson_id: "t1-l1".to_string(),
+            tier: Tier::Tier1Foundation,
+            passed: true,
+        };
+
+        let updated = repo
+            .record_session_result(kind, &summary, 38, &[])
+            .unwrap();
+
+        assert_eq!(updated.sessions.len(), 1);
+        assert_eq!(updated.sessions[0].duration_secs, 38);
+        assert_eq!(updated.sessions[0].summary, summary);
+        match &updated.sessions[0].kind {
+            SessionKind::Lesson {
+                lesson_id,
+                tier,
+                passed,
+            } => {
+                assert_eq!(lesson_id, "t1-l1");
+                assert_eq!(*tier, Tier::Tier1Foundation);
+                assert!(*passed);
+            }
+            other => panic!("expected SessionKind::Lesson, got {other:?}"),
+        }
     }
 }

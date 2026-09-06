@@ -191,6 +191,80 @@ pub(crate) fn schema_v1() -> u32 {
     1
 }
 
+/// The eight metric fields shared by every session kind, regardless of
+/// whether the session was a typing lesson, an adaptive drill, or a
+/// dictation exercise (design D5).
+///
+/// Deliberately does **not** derive `Default`: `SessionMetrics::default()`
+/// uses `accuracy: 100.0`/`consistency: 100.0` (the project's "no data yet
+/// ⇒ perfect accuracy" convention), and nothing forces `SessionSummary` to
+/// mirror that silently. If a `Default` is ever needed it must be written
+/// by hand to preserve that same convention explicitly.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SessionSummary {
+    pub cpm: f64,
+    pub raw_wpm: f64,
+    pub net_wpm: f64,
+    pub accuracy: f64,
+    pub consistency: f64,
+    pub total_keystrokes: usize,
+    pub correct_keystrokes: usize,
+    pub error_count: usize,
+}
+
+/// Kind-specific payload for a completed session. Internally tagged so each
+/// variant carries exactly the fields that make sense for it — a `Drill`
+/// cannot carry `passed`, a `Lesson` cannot carry reaction times.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind")]
+pub enum SessionKind {
+    Lesson {
+        lesson_id: String,
+        tier: Tier,
+        passed: bool,
+    },
+    Drill,
+    Dictation {
+        avg_reaction_time_ms: f64,
+        min_reaction_time_ms: f64,
+        max_reaction_time_ms: f64,
+        total_words: usize,
+        completed_words: usize,
+    },
+}
+
+/// Fieldless discriminant for [`SessionKind`], used as the roll-up merge key
+/// (design D6) without carrying a full payload.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SessionKindTag {
+    Lesson,
+    Drill,
+    Dictation,
+}
+
+impl SessionKind {
+    pub fn tag(&self) -> SessionKindTag {
+        match self {
+            SessionKind::Lesson { .. } => SessionKindTag::Lesson,
+            SessionKind::Drill => SessionKindTag::Drill,
+            SessionKind::Dictation { .. } => SessionKindTag::Dictation,
+        }
+    }
+}
+
+/// One detailed, retained session-history entry (design D1: aggregates-only,
+/// no raw keystrokes).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SessionRecord {
+    /// Same clock as `BestScore::completed_at`.
+    pub completed_at: u64,
+    /// Kind-specific basis: typing wall-clock for `Lesson`/`Drill`, active
+    /// typing window for `Dictation` (design D5).
+    pub duration_secs: u64,
+    pub summary: SessionSummary,
+    pub kind: SessionKind,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UserProgress {
     #[serde(default = "schema_v1")]
@@ -199,6 +273,11 @@ pub struct UserProgress {
     pub unlocked_tier: Tier,
     pub total_practice_seconds: u64,
     pub key_stats: HashMap<char, KeyStat>,
+    /// Detailed session-history records, most-recent session appended last.
+    /// Read consumers must go through an ordering accessor rather than
+    /// relying on storage order (introduced in a later slice).
+    #[serde(default)]
+    pub sessions: Vec<SessionRecord>,
     /// Set when `ProgressRepository::load()` recovered from a corrupt file
     /// but could not quarantine it (e.g. read-only directory). Never
     /// persisted: a load-status flag on a domain struct is a deliberate,
@@ -217,6 +296,7 @@ impl Default for UserProgress {
             unlocked_tier: Tier::Tier1Foundation,
             total_practice_seconds: 0,
             key_stats: HashMap::new(),
+            sessions: Vec::new(),
             load_degraded: false,
         }
     }
@@ -395,6 +475,113 @@ mod tests {
             0,
         );
         assert_eq!(status, PlanetStatus::Unexplored);
+    }
+
+    #[test]
+    fn test_session_kind_serde_round_trip_lesson() {
+        let kind = SessionKind::Lesson {
+            lesson_id: "t1-l1".to_string(),
+            tier: Tier::Tier1Foundation,
+            passed: true,
+        };
+
+        let json = serde_json::to_string(&kind).unwrap();
+        let restored: SessionKind = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(restored, kind);
+    }
+
+    #[test]
+    fn test_session_kind_serde_round_trip_drill() {
+        let kind = SessionKind::Drill;
+
+        let json = serde_json::to_string(&kind).unwrap();
+        let restored: SessionKind = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(restored, kind);
+    }
+
+    #[test]
+    fn test_session_kind_serde_round_trip_dictation() {
+        let kind = SessionKind::Dictation {
+            avg_reaction_time_ms: 320.5,
+            min_reaction_time_ms: 180.0,
+            max_reaction_time_ms: 610.2,
+            total_words: 12,
+            completed_words: 10,
+        };
+
+        let json = serde_json::to_string(&kind).unwrap();
+        let restored: SessionKind = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(restored, kind);
+    }
+
+    #[test]
+    fn test_session_kind_tag_maps_correctly() {
+        let lesson = SessionKind::Lesson {
+            lesson_id: "t1-l1".to_string(),
+            tier: Tier::Tier1Foundation,
+            passed: false,
+        };
+        let dictation = SessionKind::Dictation {
+            avg_reaction_time_ms: 0.0,
+            min_reaction_time_ms: 0.0,
+            max_reaction_time_ms: 0.0,
+            total_words: 0,
+            completed_words: 0,
+        };
+
+        assert_eq!(lesson.tag(), SessionKindTag::Lesson);
+        assert_eq!(SessionKind::Drill.tag(), SessionKindTag::Drill);
+        assert_eq!(dictation.tag(), SessionKindTag::Dictation);
+    }
+
+    #[test]
+    fn test_user_progress_sessions_defaults_empty_when_absent_from_json() {
+        let json = r#"{
+            "completed_lessons": {},
+            "unlocked_tier": "Tier1Foundation",
+            "total_practice_seconds": 0,
+            "key_stats": {}
+        }"#;
+
+        let progress: UserProgress = serde_json::from_str(json).unwrap();
+
+        assert_eq!(progress.sessions.len(), 0);
+    }
+
+    #[test]
+    fn test_user_progress_sessions_round_trips_through_serde() {
+        let mut progress = UserProgress::default();
+        progress.sessions.push(SessionRecord {
+            completed_at: 1_700_000_000,
+            duration_secs: 42,
+            summary: SessionSummary {
+                cpm: 155.0,
+                raw_wpm: 31.0,
+                net_wpm: 31.0,
+                accuracy: 98.5,
+                consistency: 92.0,
+                total_keystrokes: 100,
+                correct_keystrokes: 98,
+                error_count: 2,
+            },
+            kind: SessionKind::Lesson {
+                lesson_id: "t1-l1".to_string(),
+                tier: Tier::Tier1Foundation,
+                passed: true,
+            },
+        });
+
+        let json = serde_json::to_string(&progress).unwrap();
+        let restored: UserProgress = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(restored.sessions.len(), 1);
+        assert_eq!(restored.sessions[0].summary, progress.sessions[0].summary);
+        assert_eq!(restored.sessions[0].kind, progress.sessions[0].kind);
+        assert_eq!(restored.sessions[0].duration_secs, 42);
+        assert_eq!(restored.sessions[0].completed_at, 1_700_000_000);
     }
 
     #[test]
