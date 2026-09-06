@@ -1,4 +1,4 @@
-use crate::core::model::{Lesson, PlanetStatus, Tier};
+use crate::core::model::{Lesson, PlanetStatus, SessionKind, SessionRecord, Tier};
 use crate::core::Curriculum;
 use crate::tui::animation::ShipPhase;
 use crate::tui::app::{App, CurrentView};
@@ -43,8 +43,7 @@ pub fn render(f: &mut Frame, app: &App) {
             }
         }
         CurrentView::Stats => render_stats(f, app),
-        // Real rendering wired in task 5.6.
-        CurrentView::History => {}
+        CurrentView::History => render_history(f, app),
         CurrentView::PlanetLessons => render_planet_lessons(f, app),
         CurrentView::Dictation => render_dictation(f, app),
         CurrentView::DictationSummary => {
@@ -705,10 +704,102 @@ fn render_stats(f: &mut Frame, app: &App) {
     f.render_widget(footer, chunks[1]);
 }
 
+/// Renders the session-history view (`CurrentView::History`), reached from
+/// `MainMenu` via `b`/`B`.
+///
+/// States covered: **ideal** (populated list) and **empty** (fresh install,
+/// no sessions yet). Loading/error/partial states are deliberately not
+/// modeled here — unlike an async fetch, `app.user_progress` is already
+/// fully loaded into memory by `App::with_repository` before any frame is
+/// drawn, so there is no in-flight or failable read at render time.
+///
+/// Reads exclusively through [`crate::core::model::UserProgress::sessions_recent_first`]
+/// — never `app.user_progress.sessions` directly — so entries always appear
+/// most-recent-first regardless of storage/retention order (design D7).
+///
+/// Deliberately out of scope (spec's history-view negative scenarios,
+/// design's content-scope requirement): no confusion/substitution matrix, no
+/// per-finger latency breakdown, no net-WPM figure, no export/import
+/// control. That data is stored (`SessionSummary::net_wpm`, `SessionBucket`,
+/// etc.) but intentionally not surfaced by this view.
+fn render_history(f: &mut Frame, app: &App) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(10), Constraint::Length(3)])
+        .split(f.area());
+
+    let mut lines = Vec::new();
+    lines.push(Line::from(Span::styled(
+        "✦ BITÁCORA DE VUELO — HISTORIAL DE SESIONES ✦",
+        Style::default().fg(Theme::PRIMARY).add_modifier(Modifier::BOLD),
+    )));
+    lines.push(Line::from(""));
+
+    let sessions = app.user_progress.sessions_recent_first();
+
+    if sessions.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "Aún no hay sesiones en tu bitácora. Completa una lección, un drill o un dictado para comenzar tu historial de vuelo.",
+            Style::default().fg(Theme::MUTED),
+        )));
+    } else {
+        for record in sessions {
+            lines.push(session_history_line(record));
+        }
+    }
+
+    let history_widget = Paragraph::new(lines)
+        .block(Theme::retro_block("HISTORIAL DE SESIONES", Theme::PRIMARY))
+        .alignment(Alignment::Left)
+        .wrap(Wrap { trim: true });
+    f.render_widget(history_widget, chunks[0]);
+
+    let footer_spans = vec![
+        Span::styled("[ESC / ENTER / Q] ", Style::default().fg(Theme::PRIMARY).add_modifier(Modifier::BOLD)),
+        Span::styled("Volver al Comando Central", Style::default().fg(Theme::TEXT)),
+    ];
+    let footer = Paragraph::new(Line::from(footer_spans))
+        .block(Theme::retro_block("ACCIONES", Theme::MUTED))
+        .alignment(Alignment::Center);
+    f.render_widget(footer, chunks[1]);
+}
+
+/// One rendered line for a single [`SessionRecord`], with kind-specific
+/// detail. Never reads `summary.net_wpm` — see [`render_history`]'s
+/// content-scope note.
+fn session_history_line(record: &SessionRecord) -> Line<'static> {
+    let (kind_label, detail) = match &record.kind {
+        SessionKind::Lesson { lesson_id, passed, .. } => {
+            let result = if *passed { "✓ Aprobado" } else { "✗ No aprobado" };
+            ("LECCIÓN".to_string(), format!("{lesson_id} — {result}"))
+        }
+        SessionKind::Drill => ("DRILL".to_string(), "Práctica de teclas débiles".to_string()),
+        SessionKind::Dictation { completed_words, total_words, .. } => {
+            ("DICTADO".to_string(), format!("{completed_words}/{total_words} palabras"))
+        }
+    };
+
+    let summary = &record.summary;
+    Line::from(vec![
+        Span::styled(
+            format!("• {kind_label:<8} "),
+            Style::default().fg(Theme::SECONDARY).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(format!("{detail} — "), Style::default().fg(Theme::TEXT)),
+        Span::styled(
+            format!(
+                "{:.0} CPM · {:.1}% precisión · {}s",
+                summary.cpm, summary.accuracy, record.duration_secs
+            ),
+            Style::default().fg(Theme::MUTED),
+        ),
+    ])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::model::{PlanetStatus, UserProgress};
+    use crate::core::model::{PlanetStatus, SessionKind, SessionRecord, SessionSummary, UserProgress};
     use crate::tui::planet_layout::{planet_at, SHIP_GUTTER_WIDTH};
     use ratatui::{backend::TestBackend, Terminal};
 
@@ -1218,5 +1309,82 @@ mod tests {
         let rendered = render_to_string(&app, 100, 34);
 
         assert!(rendered.contains(&section_title), "expected section header '{section_title}' in:\n{rendered}");
+    }
+
+    /// Builds a minimal, arbitrary [`SessionRecord`] for `CurrentView::History`
+    /// rendering tests. Mirrors the fixture pattern already used in
+    /// `storage::repository` and `core::model`'s own test modules.
+    fn make_session_record(kind: SessionKind, completed_at: u64) -> SessionRecord {
+        SessionRecord {
+            completed_at,
+            duration_secs: 42,
+            summary: SessionSummary {
+                cpm: 180.0,
+                raw_wpm: 36.0,
+                net_wpm: 34.0,
+                accuracy: 96.5,
+                consistency: 90.0,
+                total_keystrokes: 120,
+                correct_keystrokes: 116,
+                error_count: 4,
+            },
+            kind,
+        }
+    }
+
+    #[test]
+    fn test_history_view_empty_renders_without_panic() {
+        let mut app = App::new();
+        app.user_progress = UserProgress::default();
+        app.current_view = CurrentView::History;
+
+        // Must not panic; the assertion below is a secondary sanity check
+        // that something was actually drawn (an empty-state message).
+        let rendered = render_to_string(&app, 100, 30);
+        assert!(!rendered.trim().is_empty());
+    }
+
+    #[test]
+    fn test_history_view_mixed_kind_shows_both_kinds_and_excludes_out_of_scope_content() {
+        let mut app = App::new();
+        app.user_progress = UserProgress::default();
+        app.user_progress.sessions.push(make_session_record(
+            SessionKind::Lesson {
+                lesson_id: "t1-l1".to_string(),
+                tier: Tier::Tier1Foundation,
+                passed: true,
+            },
+            1_700_000_000,
+        ));
+        app.user_progress.sessions.push(make_session_record(
+            SessionKind::Dictation {
+                avg_reaction_time_ms: 300.0,
+                min_reaction_time_ms: 150.0,
+                max_reaction_time_ms: 500.0,
+                total_words: 5,
+                completed_words: 5,
+            },
+            1_700_000_100,
+        ));
+        app.current_view = CurrentView::History;
+
+        let rendered = render_to_string(&app, 120, 30);
+
+        assert!(rendered.contains("LECCIÓN"), "expected a Lesson-kind entry in:\n{rendered}");
+        assert!(rendered.contains("DICTADO"), "expected a Dictation-kind entry in:\n{rendered}");
+
+        // Spec rev 2's three negative scenarios (history-view content scope):
+        // no confusion/substitution matrix, no per-finger latency breakdown,
+        // no net-WPM figure, no export/import control. This data is stored
+        // (SessionSummary::net_wpm, SessionBucket, etc.) but never surfaced
+        // by this view.
+        let lower = rendered.to_lowercase();
+        assert!(!lower.contains("confus"), "must not render a confusion matrix:\n{rendered}");
+        assert!(!lower.contains("sustituci"), "must not render a substitution matrix:\n{rendered}");
+        assert!(!lower.contains("matriz"), "must not render any matrix widget:\n{rendered}");
+        assert!(!lower.contains("dedo"), "must not render a per-finger latency breakdown:\n{rendered}");
+        assert!(!lower.contains("wpm neto"), "must not render a net-WPM figure:\n{rendered}");
+        assert!(!lower.contains("exportar"), "must not render an export control:\n{rendered}");
+        assert!(!lower.contains("importar"), "must not render an import control:\n{rendered}");
     }
 }
