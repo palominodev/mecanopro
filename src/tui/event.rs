@@ -156,8 +156,12 @@ impl EventHandler {
                 _ => {}
             },
 
-            // Exit binding wired in task 5.4; entry-only for now (task 5.2).
-            CurrentView::History => {}
+            CurrentView::History => match key.code {
+                KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') | KeyCode::Char('Q') => {
+                    app.return_to_star_map();
+                }
+                _ => {}
+            },
 
             CurrentView::Dictation => {
                 if key.modifiers.contains(KeyModifiers::CONTROL) && (key.code == KeyCode::Char('v') || key.code == KeyCode::Char('V')) {
@@ -553,6 +557,41 @@ mod tests {
             Tier::Tier5SpeedAndCadence.index(),
             "Dictation back must derive the planet from the selected lesson via return_to_star_map"
         );
+    }
+
+    #[test]
+    fn test_history_esc_enter_q_return_to_mainmenu() {
+        for code in [KeyCode::Esc, KeyCode::Enter, KeyCode::Char('q')] {
+            let mut app = App::new();
+            app.user_progress = UserProgress::default();
+            app.current_view = CurrentView::History;
+
+            EventHandler::handle_key(&mut app, key(code));
+
+            assert_eq!(
+                app.current_view,
+                CurrentView::MainMenu,
+                "key {code:?} must return to MainMenu from History"
+            );
+        }
+    }
+
+    /// Regression guard: History's new `b`/`B` binding must not disturb
+    /// Stats' existing `e`/`E` binding from MainMenu.
+    #[test]
+    fn test_stats_binding_unaffected_by_history_addition() {
+        for code in [KeyCode::Char('e'), KeyCode::Char('E')] {
+            let mut app = App::new();
+            app.user_progress = UserProgress::default();
+
+            EventHandler::handle_key(&mut app, key(code));
+
+            assert_eq!(
+                app.current_view,
+                CurrentView::Stats,
+                "key {code:?} must still open Stats from MainMenu"
+            );
+        }
     }
 
     /// Expected observable effect of one `MainMenu` key binding.
