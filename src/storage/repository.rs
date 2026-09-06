@@ -737,6 +737,67 @@ mod tests {
         }
     }
 
+    /// Spec scenario "Adaptive drill still accrues practice time and key
+    /// stats" (Adaptive Drill Exclusion from Lesson Progress domain):
+    /// `SessionKind::Drill` shares the accruing match arm with `Lesson`
+    /// (repository.rs's exhaustive `match &kind`), so a drill pass must
+    /// still add to `total_practice_seconds` and feed `key_stats`, while
+    /// never creating a `completed_lessons` entry (that stays Lesson-only).
+    #[test]
+    fn test_record_session_result_drill_accrues_practice_seconds_and_key_stats_no_completed_lessons(
+    ) {
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("progress.json");
+        let repo = ProgressRepository::with_path(&file_path);
+
+        let summary = SessionSummary {
+            cpm: 120.0,
+            raw_wpm: 24.0,
+            net_wpm: 24.0,
+            accuracy: 90.0,
+            consistency: 85.0,
+            total_keystrokes: 2,
+            correct_keystrokes: 1,
+            error_count: 1,
+        };
+        let keystrokes = vec![
+            KeyStroke {
+                expected: 'j',
+                actual: 'j',
+                timestamp: std::time::Duration::from_millis(50),
+                is_correct: true,
+                is_dead_key: false,
+                latency: std::time::Duration::from_millis(50),
+            },
+            KeyStroke {
+                expected: 'k',
+                actual: 'l',
+                timestamp: std::time::Duration::from_millis(60),
+                is_correct: false,
+                is_dead_key: false,
+                latency: std::time::Duration::from_millis(60),
+            },
+        ];
+
+        let updated = repo
+            .record_session_result(SessionKind::Drill, &summary, 25, &keystrokes)
+            .unwrap();
+
+        assert_eq!(
+            updated.total_practice_seconds, 25,
+            "a drill pass must accrue total_practice_seconds exactly like a lesson"
+        );
+        assert_eq!(updated.key_stats.len(), 2);
+        assert_eq!(updated.key_stats[&'j'].attempts, 1);
+        assert_eq!(updated.key_stats[&'j'].errors, 0);
+        assert_eq!(updated.key_stats[&'k'].attempts, 1);
+        assert_eq!(updated.key_stats[&'k'].errors, 1);
+        assert!(
+            updated.completed_lessons.is_empty(),
+            "a drill must never write a completed_lessons entry"
+        );
+    }
+
     #[test]
     fn test_below_retention_cap_all_sessions_stay_detailed() {
         let dir = tempdir().unwrap();
