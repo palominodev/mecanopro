@@ -74,9 +74,10 @@ impl ProgressRepository {
     /// Renames the current storage file to `progress.corrupt-<unix>.json` in
     /// the same directory, preserving its original bytes. Shared by `load()`
     /// (on parse failure) and `save()` (when the on-disk probe itself fails
-    /// to parse). This is `load()`'s one deliberate filesystem side effect:
-    /// it is the only site holding both the failure signal and the original
-    /// bytes at the same time.
+    /// to parse). Both callers proceed after a successful quarantine. If the
+    /// rename itself fails, `save()` fails closed via `?` propagation, and
+    /// `load()` sets the degraded latch so the next `save()` refuses to
+    /// overwrite the still-corrupt original.
     fn quarantine(&self) -> std::io::Result<PathBuf> {
         let now_unix = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -96,14 +97,22 @@ impl ProgressRepository {
         }
 
         match fs::read_to_string(&self.storage_path) {
-            Ok(content) => {
-                if let Ok(probe) = serde_json::from_str::<VersionProbe>(&content)
-                    && probe.version > SCHEMA_VERSION
-                {
+            Ok(content) => match serde_json::from_str::<VersionProbe>(&content) {
+                Ok(probe) if probe.version > SCHEMA_VERSION => {
                     // A newer binary wrote this file; refuse to overwrite it.
                     return Err(std::io::Error::from(std::io::ErrorKind::InvalidData));
                 }
-            }
+                Ok(_) => {}
+                Err(_) => {
+                    // The on-disk probe itself fails to parse: this
+                    // repository is stateless, so save() cannot know
+                    // whether load() already quarantined the file. Quarantine
+                    // it now, then proceed with the write. If the quarantine
+                    // rename itself fails, `?` fails closed here rather than
+                    // risking the still-unrecoverable original.
+                    self.quarantine()?;
+                }
+            },
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(e) => return Err(e),
         }
@@ -254,6 +263,39 @@ mod tests {
     }
 
     #[test]
+    fn test_save_quarantines_unparsable_probe_before_overwriting() {
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("progress.json");
+        let garbage = "{ this is not valid json at all";
+        fs::write(&file_path, garbage).unwrap();
+
+        // Call save() directly, bypassing load(): a stateless
+        // ProgressRepository cannot know whether load() already quarantined
+        // this file, so save() must protect it independently (D3's
+        // probe-failure table: "JSON parse error -> quarantine ... then
+        // proceed").
+        let repo = ProgressRepository::with_path(&file_path);
+        let result = repo.save(&UserProgress::default());
+
+        assert!(result.is_ok());
+
+        // The corrupt bytes were preserved under quarantine, not silently
+        // destroyed by the write that just happened.
+        let quarantined: Vec<_> = fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                e.file_name()
+                    .to_string_lossy()
+                    .starts_with("progress.corrupt-")
+            })
+            .collect();
+        assert_eq!(quarantined.len(), 1);
+        let quarantined_content = fs::read_to_string(quarantined[0].path()).unwrap();
+        assert_eq!(quarantined_content, garbage);
+    }
+
+    #[test]
     fn test_save_refuses_when_on_disk_version_is_newer() {
         let dir = tempdir().unwrap();
         let file_path = dir.path().join("progress.json");
@@ -271,7 +313,15 @@ mod tests {
         let original = fs::read_to_string(&file_path).unwrap();
 
         let repo = ProgressRepository::with_path(&file_path);
-        let progress = UserProgress::default();
+        // Load the same v99 fixture rather than using `UserProgress::default()`
+        // (in-memory SCHEMA_VERSION). `load()` + `migrate()` leaves a newer
+        // in-memory version untouched (model.rs's `migrate()` clamps up only),
+        // so `progress.version == 99` here too. This is deliberate: it is the
+        // only way this test can distinguish the correct predicate
+        // `probe.version > SCHEMA_VERSION` from design rev 1's broken
+        // `probe.version > progress.version`, which would evaluate
+        // `99 > 99 == false` and wrongly let this save() through.
+        let progress = repo.load();
         let result = repo.save(&progress);
 
         assert!(result.is_err());
@@ -364,6 +414,73 @@ mod tests {
         let result = repo.save(&progress);
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().kind(), std::io::ErrorKind::InvalidData);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_record_session_result_fails_closed_and_preserves_corrupt_file_when_quarantine_fails() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("progress.json");
+        let garbage = "{ not valid json";
+        fs::write(&file_path, garbage).unwrap();
+
+        let restore_writable = || {
+            let mut perms = fs::metadata(dir.path()).unwrap().permissions();
+            perms.set_mode(0o755);
+            fs::set_permissions(dir.path(), perms).unwrap();
+        };
+
+        let mut perms = fs::metadata(dir.path()).unwrap().permissions();
+        perms.set_mode(0o555); // read+execute only: rename requires write.
+        fs::set_permissions(dir.path(), perms).unwrap();
+
+        // Probe that the rename actually fails here before asserting on it.
+        // Some sandboxes/CI run as root, where permission bits do not block
+        // renames; in that case skip with a documented note instead of
+        // asserting behavior that cannot occur in this environment.
+        let probe_target = dir.path().join("probe-rename-target");
+        let probe_result = fs::rename(&file_path, &probe_target);
+        let write_actually_fails = probe_result.is_err();
+        if probe_result.is_ok() {
+            fs::rename(&probe_target, &file_path).ok();
+        }
+
+        if !write_actually_fails {
+            restore_writable();
+            eprintln!(
+                "SKIPPED: running with privileges that bypass directory write \
+                 permission (e.g. root); cannot exercise a real rename failure here."
+            );
+            return;
+        }
+
+        let repo = ProgressRepository::with_path(&file_path);
+        let metrics = SessionMetrics {
+            cpm: 100.0,
+            raw_wpm: 20.0,
+            net_wpm: 20.0,
+            accuracy: 95.0,
+            consistency: 90.0,
+            total_keystrokes: 10,
+            correct_keystrokes: 9,
+            error_count: 1,
+            elapsed: Duration::from_secs(5),
+        };
+
+        // Drive the full record_session_result path (load -> mutate -> save),
+        // not save() directly: this is the entry point actually used at
+        // app.rs's session-completion call sites.
+        let result =
+            repo.record_session_result("t1-l1", &metrics, Tier::Tier1Foundation, true, &[]);
+        restore_writable();
+
+        assert!(result.is_err());
+        // The corrupt original is still sitting at storage_path, untouched:
+        // load()'s failed quarantine latched load_degraded, and save()
+        // refused to overwrite it.
+        assert_eq!(fs::read_to_string(&file_path).unwrap(), garbage);
     }
 
     #[cfg(unix)]
