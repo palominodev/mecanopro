@@ -1021,6 +1021,83 @@ mod tests {
         );
     }
 
+    /// Spec scenario "Dictation errors feed weak-key drill selection"
+    /// (revision 2, new): drives the full causal chain end-to-end --
+    /// dictation keystrokes -> `record_session_result`'s `key_stats`
+    /// accrual -> `start_adaptive_drill`'s weak-key filter (error rate or
+    /// latency threshold) -> `Curriculum::generate_weak_key_drill`. Builds
+    /// the `DictationEngine` directly with a fixed two-word list (instead
+    /// of `App::start_dictation`'s randomized tier pool) so the exact
+    /// keystroke sequence -- and therefore which single key crosses the
+    /// weak-key threshold -- is deterministic. Uses `App::with_repository`
+    /// so nothing touches the real XDG `progress.json`.
+    #[test]
+    fn test_dictation_errors_feed_weak_key_drill_selection() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = ProgressRepository::with_path(dir.path().join("progress.json"));
+        let mut app = App::with_repository(repo);
+        app.user_progress = UserProgress::default();
+
+        app.current_dictation = Some(crate::core::dictation::DictationEngine::new(
+            vec!["casa".to_string(), "sala".to_string()],
+            crate::core::dictation::DictationConfig::default(),
+        ));
+
+        // "casa": c-a-s-a. Deliberately mistype the first 'a' (expected 'a',
+        // typed 'x') before correcting it, so key_stats['a'] gets one error
+        // among several correct attempts -- enough to cross the
+        // `error_rate() > 4.0` weak-key threshold -- while every other key
+        // typed here (c, s, l) stays error-free and therefore under it.
+        app.handle_dictation_key_input('c');
+        app.handle_dictation_key_input('x');
+        app.handle_dictation_key_input('a');
+        app.handle_dictation_key_input('s');
+        app.handle_dictation_key_input('a');
+        // "sala": s-a-l-a, typed correctly, completes the session.
+        app.handle_dictation_key_input('s');
+        app.handle_dictation_key_input('a');
+        app.handle_dictation_key_input('l');
+        app.handle_dictation_key_input('a');
+
+        assert_eq!(app.current_view, CurrentView::DictationSummary);
+        let a_stat = app
+            .user_progress
+            .key_stats
+            .get(&'a')
+            .expect("dictation must have fed key_stats for 'a'");
+        assert!(
+            a_stat.error_rate() > 4.0,
+            "'a' must cross the weak-key error-rate threshold, got {}",
+            a_stat.error_rate()
+        );
+        for other in ['c', 's', 'l'] {
+            if let Some(stat) = app.user_progress.key_stats.get(&other) {
+                assert!(
+                    stat.error_rate() <= 4.0 && stat.avg_latency_ms() <= 400.0,
+                    "key '{other}' must not also cross the weak-key threshold"
+                );
+            }
+        }
+
+        app.start_adaptive_drill();
+
+        let drill_text = app
+            .current_engine
+            .as_ref()
+            .expect("start_adaptive_drill must start a practice session")
+            .lesson
+            .text
+            .clone();
+        assert!(
+            !drill_text.is_empty(),
+            "generated drill text must not be empty"
+        );
+        assert!(
+            drill_text.chars().all(|c| c == 'a' || c == ' '),
+            "drill text must target only the weak key 'a', got: {drill_text:?}"
+        );
+    }
+
     #[test]
     fn test_return_snaps_ship() {
         let mut app = App::new();
