@@ -2509,10 +2509,12 @@ mod tests {
         );
 
         let progress = UserProgress {
+            version: crate::core::model::SCHEMA_VERSION,
             completed_lessons,
             unlocked_tier: Tier::Tier1Foundation,
             total_practice_seconds: 0,
             key_stats: HashMap::new(),
+            load_degraded: false,
         };
 
         let tier_progress = Curriculum::tier_progress(Tier::Tier1Foundation, &progress);

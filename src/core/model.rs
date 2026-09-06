@@ -178,21 +178,59 @@ impl KeyStat {
     }
 }
 
+/// Current on-disk schema version written by this binary.
+pub const SCHEMA_VERSION: u32 = 2;
+
+/// Serde per-field default for `UserProgress::version`. A `progress.json`
+/// with no `version` key predates this field entirely, so it is treated as
+/// schema version 1 (the pre-change baseline).
+///
+/// `pub(crate)` so `storage::repository`'s `VersionProbe` reuses the exact
+/// same sentinel instead of duplicating the literal.
+pub(crate) fn schema_v1() -> u32 {
+    1
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UserProgress {
+    #[serde(default = "schema_v1")]
+    pub version: u32,
     pub completed_lessons: HashMap<String, BestScore>,
     pub unlocked_tier: Tier,
     pub total_practice_seconds: u64,
     pub key_stats: HashMap<char, KeyStat>,
+    /// Set when `ProgressRepository::load()` recovered from a corrupt file
+    /// but could not quarantine it (e.g. read-only directory). Never
+    /// persisted: a load-status flag on a domain struct is a deliberate,
+    /// least-ripple tradeoff over changing `load()`'s return type.
+    /// `ProgressRepository::save()` refuses to write while this is set, so
+    /// the still-corrupt original is never silently overwritten.
+    #[serde(skip)]
+    pub load_degraded: bool,
 }
 
 impl Default for UserProgress {
     fn default() -> Self {
         Self {
+            version: SCHEMA_VERSION,
             completed_lessons: HashMap::new(),
             unlocked_tier: Tier::Tier1Foundation,
             total_practice_seconds: 0,
             key_stats: HashMap::new(),
+            load_degraded: false,
+        }
+    }
+}
+
+impl UserProgress {
+    /// Bumps an in-memory schema version up to `SCHEMA_VERSION`, never down.
+    /// A version newer than `SCHEMA_VERSION` (a file written by a newer
+    /// binary) is left untouched, so `ProgressRepository::save`'s refusal
+    /// check (`probe.version > SCHEMA_VERSION`) stays consistent with what
+    /// was actually on disk.
+    pub fn migrate(&mut self) {
+        if self.version < SCHEMA_VERSION {
+            self.version = SCHEMA_VERSION;
         }
     }
 }
@@ -250,6 +288,30 @@ pub struct TierProgress {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_migrate_bumps_pre_change_version_up_to_current_schema() {
+        let mut progress = UserProgress {
+            version: schema_v1(),
+            ..UserProgress::default()
+        };
+
+        progress.migrate();
+
+        assert_eq!(progress.version, SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn test_migrate_never_lowers_a_newer_in_memory_version() {
+        let mut progress = UserProgress {
+            version: SCHEMA_VERSION + 1,
+            ..UserProgress::default()
+        };
+
+        progress.migrate();
+
+        assert_eq!(progress.version, SCHEMA_VERSION + 1);
+    }
 
     #[test]
     fn test_tier_all_order_and_index_roundtrip() {
