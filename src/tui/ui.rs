@@ -43,6 +43,8 @@ pub fn render(f: &mut Frame, app: &App) {
             }
         }
         CurrentView::Stats => render_stats(f, app),
+        // Real rendering wired in task 5.6.
+        CurrentView::History => {}
         CurrentView::PlanetLessons => render_planet_lessons(f, app),
         CurrentView::Dictation => render_dictation(f, app),
         CurrentView::DictationSummary => {

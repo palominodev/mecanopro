@@ -15,6 +15,7 @@ pub enum CurrentView {
     Practice,
     Summary,
     Stats,
+    History,
     Dictation,
     DictationSummary,
     PlanetLessons,

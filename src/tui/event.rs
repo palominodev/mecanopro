@@ -129,6 +129,7 @@ impl EventHandler {
                 KeyCode::Char('v') | KeyCode::Char('V') => app.start_dictation(None, None),
                 KeyCode::Char('d') | KeyCode::Char('D') => app.start_adaptive_drill(),
                 KeyCode::Char('e') | KeyCode::Char('E') => app.current_view = CurrentView::Stats,
+                KeyCode::Char('b') | KeyCode::Char('B') => app.current_view = CurrentView::History,
                 _ => {}
             },
 
@@ -154,6 +155,9 @@ impl EventHandler {
                 }
                 _ => {}
             },
+
+            // Exit binding wired in task 5.4; entry-only for now (task 5.2).
+            CurrentView::History => {}
 
             CurrentView::Dictation => {
                 if key.modifiers.contains(KeyModifiers::CONTROL) && (key.code == KeyCode::Char('v') || key.code == KeyCode::Char('V')) {
@@ -577,6 +581,8 @@ mod tests {
             ("l", 2, key(KeyCode::Char('l')), MenuEffect::View(CurrentView::PlanetLessons)),
             ("e", 0, key(KeyCode::Char('e')), MenuEffect::View(CurrentView::Stats)),
             ("v", 0, key(KeyCode::Char('v')), MenuEffect::View(CurrentView::Dictation)),
+            ("b", 0, key(KeyCode::Char('b')), MenuEffect::View(CurrentView::History)),
+            ("B", 0, key(KeyCode::Char('B')), MenuEffect::View(CurrentView::History)),
             ("q", 0, key(KeyCode::Char('q')), MenuEffect::Quit),
             ("Ctrl+c", 0, KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL), MenuEffect::Quit),
         ];
