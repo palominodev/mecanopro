@@ -4,6 +4,7 @@ dist/
 *.local
 .env
 .codegraph/
+.atl/
 
 
 # Added by cargo
