@@ -1,5 +1,7 @@
 pub struct AsciiArt;
 
+use crate::tui::animation::PLANET_FRAME_COUNT;
+
 impl AsciiArt {
     /// Compact 2-line retro block font banner for MECANOPRO
     pub const LOGO_LINES: [&'static str; 2] = [
@@ -48,26 +50,57 @@ impl AsciiArt {
     ];
 
     /// Per-tier planet sprites for the Full-mode galaxy map sprite lane.
-    /// Exactly one distinct sprite per tier (7 total, in tier order), each
-    /// exactly 3 rows and at most 12 columns wide; every character has
-    /// Unicode display width 1 (no emoji, no double-width codepoints).
-    /// Sprite rows end in a glyph so the anchored rightmost character stays
-    /// visible even when the parked ship overlaps the lane's left columns.
-    pub const PLANET_SPRITES: [&'static str; 7] = [
-        // Tier1 CIMIENTOS — rocky cratered moon (▄▀ arcs + •◦ craters).
-        " ▄▀▄▀▄▀▄▀\n•◦ ▄▀▄ ◦•\n▄▀▄▀▄▀▄▀▄",
-        // Tier2 ALFABETO — ringed orb (─ ring + ◖◗◉ body; no ╭╮╰╯).
-        "─────────\n─◖──◉──◗─\n─────────",
-        // Tier3 ORTOGRAFÍA — orb with diacritic glow (◍ + ´ ` accents).
-        "´◍´◍´◍´◍´\n`── ◍ ──`\n── ◍ ´ ◍──",
-        // Tier4 SÍMBOLOS — boxed code-symbols (Double borders, not Rounded).
-        "╔─#─@─&─╗\n║ # @ & ║\n╚─#─@─&─╝",
-        // Tier5 CADENCIA — banded gas giant (░▒▓ stripes).
-        "░░▒▒▓▓▒▒░░\n▒▓░▒▓░▒▓░▒▓\n▓░▒▒▓▓▒▒░▓",
-        // Tier6 FLUIDEZ — swirling wave planet (╱╲~ + ◖◗◉ core).
-        "╱╲─╱╲─╱╲─\n~─◖─◉─◗─~\n╲╱─╲╱─╲╱─",
-        // Tier7 MAESTRÍA — glowing hyperespacio star (✦◈◉).
-        "✦─◈─✦─◈─✦\n─◈─◉─◈─◉─\n✦─◈─✦─◈─✦",
+    /// Exactly one entry per tier (7 total, in tier order), each carrying
+    /// [`PLANET_FRAME_COUNT`] drawn frames of ambient variation (craters
+    /// twinkle, ring swaps, bands shift; the renderer picks the frame via
+    /// `planet_frame_index`). Every frame is exactly 3 rows, at most 12
+    /// columns wide, and every character has Unicode display width 1 (no
+    /// emoji, no double-width codepoints). Sprite rows end in a glyph so
+    /// the anchored rightmost character stays visible even when the parked
+    /// ship overlaps the lane's left columns.
+    pub const PLANET_SPRITES: [[&'static str; PLANET_FRAME_COUNT]; 7] = [
+        // Tier1 CIMIENTOS — rocky cratered moon (▄▀ arcs + •◦ craters);
+        // frame 1 flips the arcs and swaps the crater glyphs.
+        [
+            " ▄▀▄▀▄▀▄▀\n•◦ ▄▀▄ ◦•\n▄▀▄▀▄▀▄▀▄",
+            " ▀▄▀▄▀▄▀▄\n◦• ▀▄▀ •◦\n▀▄▀▄▀▄▀▄▀",
+        ],
+        // Tier2 ALFABETO — ringed orb (─ ring + ◖◗◉ body; no ╭╮╰╯);
+        // frame 1 swaps the ring lobes from side to side.
+        [
+            "─────────\n─◖──◉──◗─\n─────────",
+            "─────────\n─◗──◉──◖─\n─────────",
+        ],
+        // Tier3 ORTOGRAFÍA — orb with diacritic glow (◍ + ´ ` accents);
+        // frame 1 flips acute/grave accents around the orb.
+        [
+            "´◍´◍´◍´◍´\n`── ◍ ──`\n─´ ◍´ ◍ ─",
+            "`◍`◍`◍`◍`\n´── ◍ ──´\n─` ◍` ◍ ─",
+        ],
+        // Tier4 SÍMBOLOS — boxed code-symbols (Double borders, not Rounded);
+        // frame 1 rotates the symbol set around the box.
+        [
+            "╔─#─@─&─╗\n║ # @ & ║\n╚─#─@─&─╝",
+            "╔─&─#─@─╗\n║ @ & # ║\n╚─@─&─#─╝",
+        ],
+        // Tier5 CADENCIA — banded gas giant (░▒▓ stripes); frame 1 shifts
+        // every band one column for a slow drift.
+        [
+            "▓░░▒▒▓▓▒▒\n▒▓░░▒▒▓▓▒\n▒▒▓░░▒▒▓▓",
+            "▒▓░░▒▒▓▓▒\n▒▒▓░░▒▒▓▓\n▓░░▒▒▓▓▒▒",
+        ],
+        // Tier6 FLUIDEZ — swirling wave planet (╱╲~ + ◖◗◉ core); frame 1
+        // flips every wave's direction.
+        [
+            "╱╲─╱╲─╱╲─\n~─◖─◉─◗─~\n╲╱─╲╱─╲╱─",
+            "╲╱─╲╱─╲╱─\n~─◖─◉─◗─~\n╱╲─╱╲─╱╲─",
+        ],
+        // Tier7 MAESTRÍA — glowing hyperespacio star (✦◈◉); frame 1 swaps
+        // every star for a diamond and vice versa.
+        [
+            "✦─◈─✦─◈─✦\n─◈─◉─◈─◉─\n✦─◈─✦─◈─✦",
+            "◈─✦─◈─✦─◈\n─◉─◈─◉─◈─\n◈─✦─◈─✦─◈",
+        ],
     ];
 
     /// 2-frame warp-trail underlay rendered behind the ship during
@@ -90,24 +123,115 @@ mod tests {
     use std::collections::HashSet;
     use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
+    /// Iterates every drawn planet frame as `(tier_index, frame_index, sprite)`.
+    fn all_planet_frames() -> impl Iterator<Item = (usize, usize, &'static str)> {
+        AsciiArt::PLANET_SPRITES
+            .iter()
+            .enumerate()
+            .flat_map(|(i, frames)| {
+                frames
+                    .iter()
+                    .enumerate()
+                    .map(move |(f, sprite)| (i, f, *sprite))
+            })
+    }
+
+    #[test]
+    fn planet_sprites_cover_all_seven_tiers() {
+        assert_eq!(
+            AsciiArt::PLANET_SPRITES.len(),
+            7,
+            "one sprite entry per tier, in tier order"
+        );
+    }
+
+    #[test]
+    fn planet_sprites_have_two_frames_per_planet() {
+        for (i, frames) in AsciiArt::PLANET_SPRITES.iter().enumerate() {
+            assert_eq!(
+                frames.len(),
+                PLANET_FRAME_COUNT,
+                "tier {i} must carry exactly PLANET_FRAME_COUNT frames"
+            );
+        }
+    }
+
+    #[test]
+    fn planet_sprite_frames_are_distinct() {
+        for (i, frames) in AsciiArt::PLANET_SPRITES.iter().enumerate() {
+            assert_ne!(
+                frames[0], frames[1],
+                "tier {i} frames must differ (ambient variation)"
+            );
+        }
+    }
+
+    #[test]
+    fn planet_sprite_rows_within_height_limit() {
+        for (i, f, sprite) in all_planet_frames() {
+            assert!(
+                sprite.lines().count() <= 3,
+                "tier {i} frame {f} exceeds the 3-row sprite lane height"
+            );
+        }
+    }
+
+    #[test]
+    fn planet_sprite_width_within_limit() {
+        for (i, f, sprite) in all_planet_frames() {
+            for row in sprite.lines() {
+                let cols = row.chars().count();
+                assert!(
+                    cols <= 12,
+                    "tier {i} frame {f} row '{row}' is {cols} chars (>12, char-counted)"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn planet_sprite_rows_are_uniform_width() {
+        for (i, f, sprite) in all_planet_frames() {
+            let widths: Vec<usize> = sprite.lines().map(|r| r.chars().count()).collect();
+            assert!(
+                widths.windows(2).all(|w| w[0] == w[1]),
+                "tier {i} frame {f} rows must be uniform width: {widths:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn planet_sprite_avoids_rounded_corner_glyphs() {
+        for (i, f, sprite) in all_planet_frames() {
+            for row in sprite.lines() {
+                for corner in ['╭', '╮', '╰', '╯'] {
+                    assert!(
+                        !row.contains(corner),
+                        "tier {i} frame {f} row '{row}' must not contain {corner}"
+                    );
+                }
+            }
+        }
+    }
+
     #[test]
     fn test_planet_sprites_single_cell_and_bounds() {
-        // Exactly 7 distinct sprites, one per tier in tier order.
-        assert_eq!(AsciiArt::PLANET_SPRITES.len(), 7);
-        let distinct: HashSet<&str> = AsciiArt::PLANET_SPRITES.iter().copied().collect();
-        assert_eq!(distinct.len(), 7, "every tier must have a distinct sprite");
-
-        for (i, sprite) in AsciiArt::PLANET_SPRITES.iter().enumerate() {
+        // Every drawn frame: exactly 3 rows, at most 12 display columns,
+        // every glyph display width 1 (no emoji, no double-width).
+        for (i, f, sprite) in all_planet_frames() {
             let rows: Vec<&str> = sprite.lines().collect();
-            assert_eq!(rows.len(), 3, "tier {i} sprite must be exactly 3 rows");
+            assert_eq!(rows.len(), 3, "tier {i} frame {f} must be exactly 3 rows");
             for row in &rows {
                 let w = UnicodeWidthStr::width(*row);
-                assert!(w <= 12, "tier {i} row '{row}' is {w} columns wide (>12)");
+                assert!(
+                    w <= 12,
+                    "tier {i} frame {f} row '{row}' is {w} columns wide (>12)"
+                );
                 for ch in row.chars() {
                     assert_eq!(
                         ch.width(),
                         Some(1),
-                        "tier {i} row '{row}': '{}' (U+{:04X}) must have display width 1 (emoji/double-width forbidden)",
+                        "tier {i} frame {f} row '{row}': '{}' (U+{:04X}) must have display width 1 (emoji/double-width forbidden)",
                         ch,
                         ch as u32
                     );
@@ -115,19 +239,10 @@ mod tests {
             }
         }
 
-        // Tier2's ringed planet must never draw rounded corners: the
-        // borderless Full-card test scans card rects for ╭╮╰╯, so the
-        // sprite itself must not introduce them.
-        for row in AsciiArt::PLANET_SPRITES[1].lines() {
-            assert!(
-                !row.contains('╭') && !row.contains('╮'),
-                "Tier2 row must not contain ╭╮: {row}"
-            );
-            assert!(
-                !row.contains('╰') && !row.contains('╯'),
-                "Tier2 row must not contain ╰╯: {row}"
-            );
-        }
+        // One distinct sprite per tier: every tier's frame 0 differs from
+        // every other tier's (identity beyond ambient variation).
+        let distinct: HashSet<&str> = AsciiArt::PLANET_SPRITES.iter().map(|f| f[0]).collect();
+        assert_eq!(distinct.len(), 7, "every tier must have a distinct sprite");
 
         // WARP_TRAIL: 2 flicker frames, 3 rows each, every row within the
         // 7-column sprite width budget.

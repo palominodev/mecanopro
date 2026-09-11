@@ -1,6 +1,6 @@
 use crate::core::model::{Lesson, PlanetStatus, SessionKind, SessionRecord, Tier};
 use crate::core::Curriculum;
-use crate::tui::animation::ShipPhase;
+use crate::tui::animation::{PLANET_FRAME_COUNT, PLANET_IDLE_PERIOD, ShipPhase, planet_frame_index};
 use crate::tui::app::{App, CurrentView};
 use crate::tui::ascii::AsciiArt;
 use crate::tui::components::{
@@ -239,6 +239,14 @@ fn render_main_menu(f: &mut Frame, app: &App) {
     let planet_rects = planet_layout(map_area);
     let is_full_mode = map_mode(map_area) == MapMode::Full;
 
+    // Ambient planet frame: cycles with the ship's monotonic mission clock
+    // at the idle period (docked-rate variation arrives in a later slice).
+    let frame = planet_frame_index(
+        app.ship.total_elapsed(),
+        PLANET_IDLE_PERIOD,
+        PLANET_FRAME_COUNT,
+    );
+
     for (i, (tp, rect)) in tier_progress.iter().zip(planet_rects.iter()).enumerate() {
         if rect.width == 0 || rect.height == 0 {
             continue;
@@ -257,7 +265,7 @@ fn render_main_menu(f: &mut Frame, app: &App) {
             // `Block`/`Borders` — the card rect must stay free of ╭╮╰╯ chrome.
             let lane = sprite_lane(*rect);
             let info = info_column(*rect);
-            let sprite_lines: Vec<Line> = AsciiArt::PLANET_SPRITES[i]
+            let sprite_lines: Vec<Line> = AsciiArt::PLANET_SPRITES[i][frame]
                 .lines()
                 .map(|row| Line::from(Span::styled(row, Style::default().fg(color))))
                 .collect();
@@ -904,13 +912,63 @@ mod tests {
             assert!(symbols.contains(&progress), "card {i} must show progress '{progress}' in:\n{symbols}");
             // The sprite's rightmost glyph sits outside the 7-column ship
             // cover, so it stays visible even on the selected card's lane.
-            let last_line = AsciiArt::PLANET_SPRITES[i].lines().last().unwrap();
+            let last_line = AsciiArt::PLANET_SPRITES[i][0].lines().last().unwrap();
             let anchor = last_line
                 .chars()
                 .rev()
                 .find(|c| !c.is_whitespace())
                 .expect("sprite last row must end in a glyph");
             assert!(symbols.contains(anchor), "card {i} must show sprite glyph '{anchor}' in:\n{symbols}");
+        }
+    }
+
+    #[test]
+    fn mainmenu_planet_sprite_frame_changes_over_time() {
+        let mut app = App::new();
+        app.user_progress = UserProgress::default();
+        app.selected_planet_index = 0;
+        // Park the ship on tier 0 so no sprite lane's differing columns sit
+        // under the 7-column ship cover; the frame flip must stay visible.
+        app.ship.snap_to(0);
+
+        let draw = |app: &App| {
+            let backend = TestBackend::new(120, 40);
+            let mut terminal = Terminal::new(backend).unwrap();
+            terminal.draw(|f| render(f, app)).unwrap();
+            terminal.backend().buffer().clone()
+        };
+
+        let before = draw(&app);
+        app.ship.advance(PLANET_IDLE_PERIOD);
+        let after = draw(&app);
+
+        let map = map_body_area(Rect::new(0, 0, 120, 40));
+        for (i, card) in planet_layout(map).iter().enumerate() {
+            let a = rect_symbols(&before, sprite_lane(*card));
+            let b = rect_symbols(&after, sprite_lane(*card));
+            assert_ne!(
+                a, b,
+                "tier {i} sprite lane must change after one idle period"
+            );
+        }
+    }
+
+    #[test]
+    fn mainmenu_renders_nonempty_sprite_for_every_tier() {
+        let mut app = App::new();
+        app.user_progress = UserProgress::default();
+        let backend = TestBackend::new(120, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| render(f, &app)).unwrap();
+        let buffer = terminal.backend().buffer();
+
+        let map = map_body_area(Rect::new(0, 0, 120, 40));
+        for (i, card) in planet_layout(map).iter().enumerate() {
+            let lane = rect_symbols(buffer, sprite_lane(*card));
+            assert!(
+                lane.chars().any(|c| !c.is_whitespace()),
+                "tier {i} sprite lane must render a non-empty sprite: '{lane}'"
+            );
         }
     }
 
