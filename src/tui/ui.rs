@@ -111,11 +111,6 @@ pub fn lesson_list_area(frame: Rect) -> Rect {
     map_body_area(frame)
 }
 
-/// Minimum info-column width (in columns) that still shows the secondary
-/// meta text inside a Full-mode card; below this rung the meta drops while
-/// the glyph, badge, and progress are never dropped.
-const INFO_COLUMN_FULL_DETAIL: u16 = 26;
-
 /// Truncates `s` to fit `max_width` display columns, appending an ellipsis.
 fn ellipsize(s: &str, max_width: u16) -> String {
     if max_width == 0 {
@@ -137,10 +132,12 @@ fn ellipsize(s: &str, max_width: u16) -> String {
     format!("{out}…")
 }
 
-/// Pure content of one Full-mode planet row's info column: `[name, status
-/// line, progress line]`. Degrades monotonically with `width`: (1) the
-/// secondary meta text drops first, (2) the planet name is ellipsized.
-/// The status glyph, the badge, and the progress are never dropped.
+/// Pure content of one Full-mode planet card's info block: `[name, status
+/// line, progress·meta line]` stacked below the sprite lane (D8). Degrades
+/// monotonically with `width`: (1) the trailing CPM meta detail truncates
+/// first (the progress digits lead the line, so they never drop), (2) the
+/// planet name is ellipsized. The status glyph and the badge are never
+/// dropped.
 fn info_column_content(
     name: &str,
     glyph: &str,
@@ -153,8 +150,8 @@ fn info_column_content(
         ellipsize(name, width),
         format!("{glyph} {badge}"),
         match meta {
-            Some(m) if width >= INFO_COLUMN_FULL_DETAIL => m.to_string(),
-            _ => progress.to_string(),
+            Some(m) => ellipsize(m, width),
+            None => progress.to_string(),
         },
     ]
 }
@@ -262,8 +259,9 @@ fn render_main_menu(f: &mut Frame, app: &App) {
         };
 
         if is_full_mode {
-            // Borderless card: [sprite lane | info column]. Deliberately no
-            // `Block`/`Borders` — the card rect must stay free of ╭╮╰╯ chrome.
+            // Borderless card (D8 stacked anatomy): sprite lane on top,
+            // info lines below. Deliberately no `Block`/`Borders` — the
+            // card rect must stay free of ╭╮╰╯ chrome.
             let lane = sprite_lane(*rect);
             let info = info_column(*rect);
             let sprite_lines: Vec<Line> = AsciiArt::PLANET_SPRITES[i][frame]
@@ -364,7 +362,7 @@ fn render_main_menu(f: &mut Frame, app: &App) {
 
     // 3. Footer Keybinds
     let footer_spans = vec![
-        Span::styled("[↑/↓ j/k] ", Style::default().fg(Theme::PRIMARY).add_modifier(Modifier::BOLD)),
+        Span::styled("[←/→ h/l] ", Style::default().fg(Theme::PRIMARY).add_modifier(Modifier::BOLD)),
         Span::styled("Planeta  ", Style::default().fg(Theme::TEXT)),
         Span::styled("[ENTER] ", Style::default().fg(Theme::SUCCESS).add_modifier(Modifier::BOLD)),
         Span::styled("Explorar  ", Style::default().fg(Theme::TEXT)),
@@ -862,22 +860,27 @@ mod tests {
 
     #[test]
     fn test_info_column_degrades_monotonically() {
+        // Stacked D8 anatomy: the info block is as wide as the card, so the
+        // meta line truncates instead of dropping wholesale.
         let long_name = "ORTOGRAFÍA ALARGADA";
         let meta = Some("7/9 sectores · meta 175 CPM");
-        let rungs = [26u16, 22, 16, 10];
+        let rungs = [28u16, 22, 16, 10];
         let contents: Vec<[String; 3]> = rungs
             .map(|w| info_column_content(long_name, "◎", "DESTINO ACTUAL", "7/9", meta, w))
             .to_vec();
 
-        // Secondary meta text drops first: only the {26} rung keeps it...
-        assert!(contents[0][2].contains("sectores"), "rung 26 must show meta text: {:?}", contents[0]);
-        for c in &contents[1..] {
-            assert!(!c[2].contains("sectores"), "rungs < 26 must drop meta text: {:?}", c);
+        // Line 3 is the progress·meta line: the leading progress digits
+        // survive every rung, the trailing CPM detail drops first.
+        for c in &contents {
+            assert!(c[2].starts_with("7/9"), "progress must lead every rung: {:?}", c[2]);
         }
-        assert!(contents[3][2].contains("7/9"), "progress must never drop: {:?}", contents[3][2]);
+        assert!(contents[0][2].ends_with("CPM"), "full meta fits at rung 28: {:?}", contents[0][2]);
+        for c in &contents[1..] {
+            assert!(!c[2].contains("CPM"), "narrow rungs must drop the CPM meta: {:?}", c);
+        }
 
         // ...then the planet name ellipsizes once it no longer fits.
-        assert_eq!(contents[0][0], long_name, "name fits at rung 26 untouched");
+        assert_eq!(contents[0][0], long_name, "name fits at rung 28 untouched");
         assert!(contents[2][0].ends_with('…'), "rung 16 must ellipsize the name: {:?}", contents[2][0]);
         assert!(contents[3][0].ends_with('…'), "rung 10 must ellipsize the name: {:?}", contents[3][0]);
 
@@ -929,9 +932,9 @@ mod tests {
             let tp = &progresses[i];
             let (glyph, _, _) = planet_style(tp.status);
             assert!(symbols.contains(glyph), "card {i} must show status glyph '{glyph}' in:\n{symbols}");
-            // Batch-A note: the horizontal band's fixed narrow cards clip the
-            // badge/progress text; full text detail returns with the D8 card
-            // anatomy restyle (lane on top, info below).
+            // D8 stacked anatomy: the info lines below the lane carry the
+            // full badge text again (the card-wide info block replaced the
+            // Batch-A 2-column side sliver that clipped it).
             let last_line = AsciiArt::PLANET_SPRITES[i][0].lines().last().unwrap();
             let anchor = last_line
                 .chars()
@@ -943,12 +946,178 @@ mod tests {
     }
 
     #[test]
+    fn mainmenu_selected_planet_visible_at_end_of_band() {
+        // Camera follow: selecting the last planet pans the window so card 6
+        // stays visible at the band's trailing edge, with its full stacked
+        // anatomy — sprite lane on top, selection marker leading the info
+        // rows BELOW the lane.
+        let mut app = App::new();
+        app.user_progress = UserProgress::default();
+        app.selected_planet_index = 6;
+        app.ship.snap_to(6);
+
+        let backend = TestBackend::new(120, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| render(f, &app)).unwrap();
+        let buffer = terminal.backend().buffer();
+
+        let map = map_body_area(Rect::new(0, 0, 120, 40));
+        let card = planet_layout(map, 6)[6];
+        assert!(
+            card.width > 0 && card.height > 0,
+            "selected end-of-band planet must be on screen: {card:?}"
+        );
+        let lane = rect_symbols(buffer, sprite_lane(card));
+        assert!(
+            lane.chars().any(|c| !c.is_whitespace()),
+            "card 6 sprite lane must render: '{lane}'"
+        );
+        let info_top = card.y + sprite_lane(card).height;
+        let marker_row = rect_symbols(buffer, Rect::new(card.x, info_top, card.width, 1));
+        assert!(
+            marker_row.contains('▶'),
+            "selected card's marker+name row must render below the lane: '{marker_row}'"
+        );
+    }
+
+    #[test]
+    fn planets_render_in_horizontal_tier_order() {
+        // The visible window renders tier cards left→right in tier order,
+        // each as a stacked card: sprite frame in the top lane rows, status
+        // glyph in the info rows below the lane.
+        let mut app = App::new();
+        app.user_progress = UserProgress::default();
+        app.selected_planet_index = 0;
+        app.ship.snap_to(0);
+
+        let backend = TestBackend::new(120, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| render(f, &app)).unwrap();
+        let buffer = terminal.backend().buffer();
+
+        let map = map_body_area(Rect::new(0, 0, 120, 40));
+        let cards = planet_layout(map, 0);
+        let progresses = Curriculum::all_tier_progress(&app.user_progress);
+        let visible: Vec<(usize, Rect)> = cards
+            .iter()
+            .cloned()
+            .enumerate()
+            .filter(|(_, r)| r.width > 0 && r.height > 0)
+            .collect();
+        assert!(visible.len() >= 2, "expected a multi-card window: {visible:?}");
+        for w in visible.windows(2) {
+            assert!(
+                w[1].1.x > w[0].1.x,
+                "cards must render in tier order left→right: {visible:?}"
+            );
+        }
+        for (i, card) in &visible {
+            let lane = rect_symbols(buffer, sprite_lane(*card));
+            assert!(
+                lane.chars().any(|c| !c.is_whitespace()),
+                "tier {i} sprite lane must render: '{lane}'"
+            );
+            let info_below_lane = Rect::new(
+                card.x,
+                card.y + sprite_lane(*card).height,
+                card.width,
+                card.height.saturating_sub(sprite_lane(*card).height),
+            );
+            let info = rect_symbols(buffer, info_below_lane);
+            let (glyph, _, _) = planet_style(progresses[*i].status);
+            assert!(
+                info.contains(glyph),
+                "tier {i} status glyph must sit in the info rows below the lane: '{info}'"
+            );
+        }
+    }
+
+    #[test]
+    fn ship_renders_in_top_gutter_row() {
+        // The parked ship flies in the top gutter rows, above the card band:
+        // no ship glyph may dip into the cards' sprite lanes while idle.
+        let mut app = App::new();
+        app.user_progress = UserProgress::default();
+        app.selected_planet_index = 0;
+        app.ship.snap_to(0);
+
+        let backend = TestBackend::new(120, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| render(f, &app)).unwrap();
+        let buffer = terminal.backend().buffer();
+
+        let map = map_body_area(Rect::new(0, 0, 120, 40));
+        let gutter = ship_gutter(map);
+        let mut ship_cells = 0usize;
+        for y in map.y..map.y + map.height {
+            for x in map.x..map.x + map.width {
+                if let Some(cell) = buffer.cell(ratatui::layout::Position::new(x, y))
+                    && matches!(cell.symbol(), "◄" | "►" | "█")
+                {
+                    assert!(
+                        y >= gutter.y && y < gutter.y + gutter.height,
+                        "parked ship must stay inside the top gutter row (y={y})"
+                    );
+                    ship_cells += 1;
+                }
+            }
+        }
+        assert!(ship_cells > 0, "parked ship sprite must render");
+    }
+
+    #[test]
+    fn no_border_chrome_inside_planet_cards() {
+        // Cards are chrome-free across their FULL stacked extent: no
+        // retro-block corner glyphs inside any visible card, and the info
+        // rows below each sprite lane must carry text. (Tier-4's sprite
+        // deliberately draws ╔╗║╚╝ itself, so only the rounded-block chrome
+        // ╭╮╰╯ is banned.)
+        let mut app = App::new();
+        app.user_progress = UserProgress::default();
+        app.selected_planet_index = 0;
+        app.ship.snap_to(0);
+
+        let backend = TestBackend::new(120, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| render(f, &app)).unwrap();
+        let buffer = terminal.backend().buffer();
+
+        let map = map_body_area(Rect::new(0, 0, 120, 40));
+        for (i, card) in planet_layout(map, 0).iter().enumerate() {
+            if card.width == 0 || card.height == 0 {
+                continue;
+            }
+            let symbols = rect_symbols(buffer, *card);
+            for corner in ['╭', '╮', '╰', '╯'] {
+                assert!(
+                    !symbols.contains(corner),
+                    "card {i} must not render border chrome inside its rect:\n{symbols}"
+                );
+            }
+            let info_below_lane = Rect::new(
+                card.x,
+                card.y + sprite_lane(*card).height,
+                card.width,
+                card.height.saturating_sub(sprite_lane(*card).height),
+            );
+            let info = rect_symbols(buffer, info_below_lane);
+            assert!(
+                info.chars().any(|c| !c.is_whitespace()),
+                "card {i} info rows below the lane must render text: '{info}'"
+            );
+        }
+    }
+
+    #[test]
     fn mainmenu_planet_sprite_frame_changes_over_time() {
         let mut app = App::new();
         app.user_progress = UserProgress::default();
         app.selected_planet_index = 0;
-        // Park the ship on tier 0 so no sprite lane's differing columns sit
-        // under the 7-column ship cover; the frame flip must stay visible.
+        // Slice-1 occlusion constraint: a ship DOCKED on a tier-4 card
+        // covers ~7 left columns of that sprite lane (SHIP_FRAME_WIDTH), so
+        // frame-diff tests must either diff only visible columns or park
+        // the ship elsewhere. Here the ship parks idle in the top gutter
+        // over tier 0, so every lane's differing columns stay uncovered.
         app.ship.snap_to(0);
 
         let draw = |app: &App| {
@@ -1046,7 +1215,7 @@ mod tests {
         let mut app = App::new();
         app.user_progress = UserProgress::default();
         app.selected_planet_index = 0;
-        app.move_planet_down(); // Traveling toward planet 1, still mid-flight
+        app.move_planet_right(); // Traveling toward planet 1, still mid-flight
 
         let backend = TestBackend::new(120, 40);
         let mut terminal = Terminal::new(backend).unwrap();
@@ -1101,13 +1270,13 @@ mod tests {
         let cards = planet_layout(map, app.selected_planet_index);
         let i = app.selected_planet_index;
         // Mid-dock: the ship dips from the flight lane onto card i's top
-        // row. A point inside card i's sprite lane — directly under the
-        // docking ship — must still resolve to card i: cards drive
-        // hit-testing, the ship sprite never does.
+        // row (the sprite lane's first row). A point on that top row —
+        // directly under the docking ship — must still resolve to card i:
+        // cards drive hit-testing, the ship sprite never does.
         let lane = sprite_lane(cards[i]);
         let under_ship = ratatui::layout::Position::new(
             lane.x + lane.width / 2,
-            cards[i].y + cards[i].height / 2,
+            cards[i].y,
         );
         assert_eq!(
             planet_at(map, under_ship, i),
@@ -1268,11 +1437,9 @@ mod tests {
 
     #[test]
     fn test_full_mode_card_shows_progress_cpm_and_badge() {
-        // Batch-A note: the horizontal band's fixed narrow cards clip the
-        // badge/meta/CPM text; those return with the D8 card anatomy restyle
-        // (lane on top, info below). What Full mode must always show is the
-        // per-tier status: the current destination glyph and the unexplored
-        // glyph across the visible window.
+        // D8 stacked anatomy: the card-wide info lines below the sprite
+        // lane restore the per-tier text — status badge and progress·meta
+        // — alongside the status glyphs across the visible window.
         let mut app = App::new();
         app.user_progress = UserProgress::default();
         app.selected_planet_index = 0;
@@ -1287,17 +1454,23 @@ mod tests {
             rendered.contains('○'),
             "expected unexplored glyph in:\n{rendered}"
         );
-        // The progress digits survive even in the 2-column info sliver.
+        assert!(
+            rendered.contains("SIN EXPLORAR"),
+            "expected unexplored badge text (fits the 14-col card) in:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("sectores"),
+            "expected progress·meta line in:\n{rendered}"
+        );
         assert!(rendered.contains('/'), "expected progress digits in:\n{rendered}");
     }
 
     #[test]
     fn test_100x34_shows_cimientos_and_sin_explorar_badges() {
         // Deterministic progress: Tier1 unlocked, nothing completed yet, so
-        // the galaxy map always shows CIMIENTOS as the current destination
-        // and every other planet as unexplored regardless of the player's
-        // real saved progress file. Status glyphs stand in for the clipped
-        // badge text until the D8 card restyle.
+        // the galaxy map always shows the current destination and every
+        // other planet as unexplored regardless of the player's real saved
+        // progress file. The D8 card-wide info lines carry the badge text.
         let mut app = App::new();
         app.user_progress = UserProgress::default();
         app.selected_planet_index = 0;
@@ -1309,8 +1482,8 @@ mod tests {
             "expected current-planet glyph in:\n{rendered}"
         );
         assert!(
-            rendered.contains('○'),
-            "expected unexplored-planet glyph in:\n{rendered}"
+            rendered.contains("SIN EXPLORAR"),
+            "expected unexplored badge text in:\n{rendered}"
         );
     }
 

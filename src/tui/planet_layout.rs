@@ -17,8 +17,16 @@ pub const MIN_FULL_WIDTH: u16 = 46;
 /// is 3 rows tall); the horizontal band reserves exactly this many top rows
 /// as the ship's flight lane.
 pub const SHIP_GUTTER_HEIGHT: u16 = 3;
-/// Height (in rows) of a single planet card in [`MapMode::Full`].
-pub const PLANET_CARD_HEIGHT: u16 = 3;
+/// Height (in rows) of the planet sprite lane: the top rows of each
+/// Full-mode card, matching the 3-row planet sprite frames in
+/// [`crate::tui::ascii::AsciiArt::PLANET_SPRITES`].
+pub const SPRITE_LANE_HEIGHT: u16 = 3;
+/// Number of info lines stacked below the sprite lane in each Full-mode
+/// card (D8 anatomy): marker+name / glyph+badge / progress·meta.
+pub const INFO_LINE_COUNT: u16 = 3;
+/// Height (in rows) of a single planet card in [`MapMode::Full`]: the
+/// sprite lane on top plus the info lines below it.
+pub const PLANET_CARD_HEIGHT: u16 = SPRITE_LANE_HEIGHT + INFO_LINE_COUNT;
 /// Minimum map-body height (in rows) required to render the full galaxy
 /// map: one ship-gutter row block plus one card row block.
 pub const MIN_FULL_HEIGHT: u16 = SHIP_GUTTER_HEIGHT + PLANET_CARD_HEIGHT;
@@ -195,25 +203,29 @@ pub fn ship_x(cards: &[Rect], pos: f32) -> f32 {
 /// down onto this lane from the top gutter row.
 pub const SPRITE_LANE_WIDTH: u16 = 12;
 
-/// Left-hand sprite lane of a Full-mode planet card. `sprite_lane ∪
-/// info_column` tiles the card exactly — no overlap, no gap — via inline
-/// Rect math (deliberately not nested `Layout`, which can leave rounding
-/// gaps).
+/// Top sprite lane of a Full-mode planet card (D8 stacked anatomy): the
+/// first [`SPRITE_LANE_HEIGHT`] rows, [`SPRITE_LANE_WIDTH`] columns wide
+/// and anchored at the card's left edge. The ship docks down onto this
+/// lane from the top gutter row. `sprite_lane ∪ info_column` tiles the
+/// card exactly — no overlap, no gap — via inline Rect math (deliberately
+/// not nested `Layout`, which can leave rounding gaps).
 pub fn sprite_lane(card: Rect) -> Rect {
     let w = SPRITE_LANE_WIDTH.min(card.width);
-    Rect::new(card.x, card.y, w, card.height)
+    let h = SPRITE_LANE_HEIGHT.min(card.height);
+    Rect::new(card.x, card.y, w, h)
 }
 
-/// Right-hand info column of a Full-mode planet card. Degrades to a
-/// zero-width slice under a `SPRITE_LANE_WIDTH`-wide card, still tiling the
-/// card without overlap or gap.
+/// Info block below the sprite lane of a Full-mode planet card (D8
+/// stacked anatomy): every row under [`sprite_lane`], spanning the full
+/// card width. Degrades to a zero-height slice on a card shorter than
+/// the lane — still tiling the card without overlap or gap.
 pub fn info_column(card: Rect) -> Rect {
-    let w = SPRITE_LANE_WIDTH.min(card.width);
+    let lane_h = SPRITE_LANE_HEIGHT.min(card.height);
     Rect::new(
-        card.x.saturating_add(w),
-        card.y,
-        card.width.saturating_sub(w),
-        card.height,
+        card.x,
+        card.y.saturating_add(lane_h),
+        card.width,
+        card.height.saturating_sub(lane_h),
     )
 }
 
@@ -742,27 +754,36 @@ mod tests {
 
     #[test]
     fn test_sprite_lane_info_column_partition() {
-        let card = Rect::new(0, 0, 66, 3);
+        // D8 stacked anatomy: the sprite lane is the top rows of the card,
+        // the info lines sit below it across the full card width.
+        let card = Rect::new(0, 0, 14, PLANET_CARD_HEIGHT);
+        assert_eq!(card.height, 6, "D8 card anatomy ≈ 6 rows");
         assert_eq!(sprite_lane(card), Rect::new(0, 0, 12, 3));
-        assert_eq!(info_column(card), Rect::new(12, 0, 54, 3));
-        // The two columns must tile the card exactly: no overlap, no gap.
-        assert_eq!(sprite_lane(card).x + sprite_lane(card).width, info_column(card).x);
+        assert_eq!(info_column(card), Rect::new(0, 3, 14, 3));
+        // The two blocks must tile the card exactly: no overlap, no gap.
         assert_eq!(
-            info_column(card).x + info_column(card).width,
-            card.x + card.width,
+            sprite_lane(card).y + sprite_lane(card).height,
+            info_column(card).y
+        );
+        assert_eq!(
+            info_column(card).y + info_column(card).height,
+            card.y + card.height,
             "sprite lane ∪ info column must cover the whole card"
         );
 
         // Off-origin cards keep the partition anchored to the card rect.
-        let off_card = Rect::new(5, 7, 30, 3);
+        let off_card = Rect::new(5, 7, 14, PLANET_CARD_HEIGHT);
         assert_eq!(sprite_lane(off_card), Rect::new(5, 7, 12, 3));
-        assert_eq!(info_column(off_card), Rect::new(17, 7, 18, 3));
+        assert_eq!(info_column(off_card), Rect::new(5, 10, 14, 3));
 
-        // Narrower than the lane: the lane clamps, info degrades to a
-        // zero-width slice — still no overlap and no gap.
-        let narrow = Rect::new(3, 1, 7, 3);
-        assert_eq!(sprite_lane(narrow), Rect::new(3, 1, 7, 3));
-        assert_eq!(info_column(narrow), Rect::new(10, 1, 0, 3));
-        assert_eq!(sprite_lane(narrow).x + sprite_lane(narrow).width, info_column(narrow).x);
+        // Shorter than the lane: the lane clamps, info degrades to a
+        // zero-height slice — still no overlap and no gap.
+        let short_card = Rect::new(3, 1, 14, 2);
+        assert_eq!(sprite_lane(short_card), Rect::new(3, 1, 12, 2));
+        assert_eq!(info_column(short_card), Rect::new(3, 3, 14, 0));
+        assert_eq!(
+            sprite_lane(short_card).y + sprite_lane(short_card).height,
+            info_column(short_card).y
+        );
     }
 }

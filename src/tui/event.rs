@@ -2,7 +2,8 @@ use crate::tui::app::{App, CurrentView};
 use crate::tui::planet_layout::{band_viewport_start, display_index_of, lesson_row_at, planet_at};
 use crate::tui::ui::{lesson_list_area, map_body_area};
 use crossterm::event::{
-    self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+    self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent,
+    MouseEventKind,
 };
 use ratatui::layout::{Position, Rect};
 use std::io;
@@ -58,18 +59,20 @@ impl EventHandler {
         }
 
         match m.kind {
-            MouseEventKind::ScrollUp => {
+            // D11: the wheel scrolls the horizontal planet band — vertical
+            // wheel directions map onto left/right moves in MainMenu.
+            MouseEventKind::ScrollUp | MouseEventKind::ScrollLeft => {
                 Self::finish_animation(app);
                 match app.current_view {
-                    CurrentView::MainMenu => app.move_planet_up(),
+                    CurrentView::MainMenu => app.move_planet_left(),
                     CurrentView::PlanetLessons => app.move_selection_up(),
                     _ => {}
                 }
             }
-            MouseEventKind::ScrollDown => {
+            MouseEventKind::ScrollDown | MouseEventKind::ScrollRight => {
                 Self::finish_animation(app);
                 match app.current_view {
-                    CurrentView::MainMenu => app.move_planet_down(),
+                    CurrentView::MainMenu => app.move_planet_right(),
                     CurrentView::PlanetLessons => app.move_selection_down(),
                     _ => {}
                 }
@@ -122,11 +125,15 @@ impl EventHandler {
         match app.current_view {
             CurrentView::MainMenu => match key.code {
                 KeyCode::Char('q') | KeyCode::Char('Q') => app.should_quit = true,
-                KeyCode::Up | KeyCode::Char('k') => app.move_planet_up(),
-                KeyCode::Down | KeyCode::Char('j') => app.move_planet_down(),
+                // D11 nav remap: the band is horizontal, so Left/h and
+                // Right/l pan between planets; Right no longer opens the
+                // lesson list (Enter keeps that job) and Up/Down/j/k are
+                // deliberately unmapped.
+                KeyCode::Left | KeyCode::Char('h') => app.move_planet_left(),
+                KeyCode::Right | KeyCode::Char('l') => app.move_planet_right(),
                 KeyCode::Home | KeyCode::Char('g') => app.planet_home(),
                 KeyCode::End | KeyCode::Char('G') => app.planet_end(),
-                KeyCode::Enter | KeyCode::Right | KeyCode::Char('l') => app.enter_planet_lessons(),
+                KeyCode::Enter => app.enter_planet_lessons(),
                 KeyCode::Char('v') | KeyCode::Char('V') => app.start_dictation(None, None),
                 KeyCode::Char('d') | KeyCode::Char('D') => app.start_adaptive_drill(),
                 KeyCode::Char('e') | KeyCode::Char('E') => app.current_view = CurrentView::Stats,
@@ -165,7 +172,9 @@ impl EventHandler {
             },
 
             CurrentView::Dictation => {
-                if key.modifiers.contains(KeyModifiers::CONTROL) && (key.code == KeyCode::Char('v') || key.code == KeyCode::Char('V')) {
+                if key.modifiers.contains(KeyModifiers::CONTROL)
+                    && (key.code == KeyCode::Char('v') || key.code == KeyCode::Char('V'))
+                {
                     app.toggle_dictation_voice();
                     return;
                 }
@@ -186,7 +195,9 @@ impl EventHandler {
 
             CurrentView::DictationSummary => match key.code {
                 KeyCode::Char('r') | KeyCode::Char('R') => app.restart_dictation(),
-                KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Enter => app.start_dictation(None, None),
+                KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Enter => {
+                    app.start_dictation(None, None)
+                }
                 KeyCode::Esc | KeyCode::Char('m') | KeyCode::Char('M') => app.return_to_star_map(),
                 _ => {}
             },
@@ -224,9 +235,9 @@ impl EventHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::model::{Tier, UserProgress};
     use crate::tui::app::App;
     use crate::tui::planet_layout::{planet_layout, MenuRow};
-    use crate::core::model::{Tier, UserProgress};
 
     fn key(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::NONE)
@@ -297,7 +308,12 @@ mod tests {
         };
         let row_y = list_area.y + 1 + 2; // inner_top + display index
 
-        EventHandler::handle_mouse(&mut app, left_click(Position::new(list_area.x + 2, row_y)), area).unwrap();
+        EventHandler::handle_mouse(
+            &mut app,
+            left_click(Position::new(list_area.x + 2, row_y)),
+            area,
+        )
+        .unwrap();
 
         assert_eq!(app.selected_lesson_index, flat);
         assert_eq!(app.current_view, CurrentView::PlanetLessons);
@@ -315,11 +331,16 @@ mod tests {
         let area = Rect::new(0, 0, 120, 40);
         let list_area = lesson_list_area(area);
         let rows = app.current_tier_rows();
-        let selected_display =
-            display_index_of(&rows, app.selected_lesson_index).expect("selected lesson must be a row");
+        let selected_display = display_index_of(&rows, app.selected_lesson_index)
+            .expect("selected lesson must be a row");
         let row_y = list_area.y + 1 + selected_display as u16;
 
-        EventHandler::handle_mouse(&mut app, left_click(Position::new(list_area.x + 2, row_y)), area).unwrap();
+        EventHandler::handle_mouse(
+            &mut app,
+            left_click(Position::new(list_area.x + 2, row_y)),
+            area,
+        )
+        .unwrap();
 
         assert_eq!(app.current_view, CurrentView::Practice);
     }
@@ -329,8 +350,11 @@ mod tests {
         let mut app = App::new();
         app.user_progress = UserProgress::default();
         app.selected_planet_index = 0;
-        app.move_planet_down();
-        assert_eq!(app.ship.phase(), crate::tui::animation::ShipPhase::Traveling);
+        app.move_planet_right();
+        assert_eq!(
+            app.ship.phase(),
+            crate::tui::animation::ShipPhase::Traveling
+        );
 
         let area = Rect::new(0, 0, 120, 40);
         let cards = planet_layout(map_body_area(area), 1);
@@ -341,7 +365,10 @@ mod tests {
         // the deferred PlanetLessons switch goes through before asserting.
         app.advance_animation(crate::tui::animation::DESCEND + std::time::Duration::from_millis(1));
 
-        assert_ne!(app.ship.phase(), crate::tui::animation::ShipPhase::Traveling);
+        assert_ne!(
+            app.ship.phase(),
+            crate::tui::animation::ShipPhase::Traveling
+        );
         assert!((app.ship.position() - 3.0).abs() < 1e-5);
         assert_eq!(app.current_view, CurrentView::PlanetLessons);
     }
@@ -351,8 +378,11 @@ mod tests {
         let mut app = App::new();
         app.user_progress = UserProgress::default();
         app.selected_planet_index = 0;
-        app.move_planet_down();
-        assert_eq!(app.ship.phase(), crate::tui::animation::ShipPhase::Traveling);
+        app.move_planet_right();
+        assert_eq!(
+            app.ship.phase(),
+            crate::tui::animation::ShipPhase::Traveling
+        );
         let position_before = app.ship.position();
 
         let area = Rect::new(0, 0, 120, 40);
@@ -394,7 +424,11 @@ mod tests {
 
             EventHandler::handle_mouse(&mut app, mouse(kind, pos), area).unwrap();
 
-            assert_eq!(app.current_view, CurrentView::MainMenu, "kind {kind:?} must not change view");
+            assert_eq!(
+                app.current_view,
+                CurrentView::MainMenu,
+                "kind {kind:?} must not change view"
+            );
             assert_eq!(
                 app.selected_planet_index,
                 Tier::Tier2FullAlphabet.index(),
@@ -410,8 +444,16 @@ mod tests {
         let mut app = App::new();
         app.user_progress = UserProgress::default();
         app.selected_planet_index = Tier::Tier2FullAlphabet.index();
-        EventHandler::handle_mouse(&mut app, mouse(MouseEventKind::ScrollDown, Position::new(0, 0)), area).unwrap();
-        assert_eq!(app.selected_planet_index, Tier::Tier3SpanishOrthography.index());
+        EventHandler::handle_mouse(
+            &mut app,
+            mouse(MouseEventKind::ScrollDown, Position::new(0, 0)),
+            area,
+        )
+        .unwrap();
+        assert_eq!(
+            app.selected_planet_index,
+            Tier::Tier3SpanishOrthography.index()
+        );
 
         let mut app = App::new();
         app.user_progress = UserProgress::default();
@@ -422,7 +464,12 @@ mod tests {
         app.advance_animation(crate::tui::animation::DESCEND + std::time::Duration::from_millis(1));
         app.move_selection_down();
         let before = app.selected_lesson_index;
-        EventHandler::handle_mouse(&mut app, mouse(MouseEventKind::ScrollUp, Position::new(0, 0)), area).unwrap();
+        EventHandler::handle_mouse(
+            &mut app,
+            mouse(MouseEventKind::ScrollUp, Position::new(0, 0)),
+            area,
+        )
+        .unwrap();
         assert_eq!(app.selected_lesson_index, before - 1);
     }
 
@@ -440,7 +487,12 @@ mod tests {
         let list_area = lesson_list_area(area);
         let header_row_y = list_area.y + 1; // display row 0 is the section header
 
-        EventHandler::handle_mouse(&mut app, left_click(Position::new(list_area.x + 2, header_row_y)), area).unwrap();
+        EventHandler::handle_mouse(
+            &mut app,
+            left_click(Position::new(list_area.x + 2, header_row_y)),
+            area,
+        )
+        .unwrap();
 
         assert_eq!(app.current_view, CurrentView::PlanetLessons);
         assert_eq!(app.selected_lesson_index, before_lesson);
@@ -448,7 +500,13 @@ mod tests {
 
     #[test]
     fn test_esc_backspace_left_h_q_preserve_selected_planet() {
-        for code in [KeyCode::Esc, KeyCode::Backspace, KeyCode::Left, KeyCode::Char('h'), KeyCode::Char('q')] {
+        for code in [
+            KeyCode::Esc,
+            KeyCode::Backspace,
+            KeyCode::Left,
+            KeyCode::Char('h'),
+            KeyCode::Char('q'),
+        ] {
             let mut app = App::new();
             app.user_progress = UserProgress::default();
             app.selected_planet_index = Tier::Tier3SpanishOrthography.index();
@@ -456,7 +514,11 @@ mod tests {
 
             EventHandler::handle_key(&mut app, key(code));
 
-            assert_eq!(app.current_view, CurrentView::MainMenu, "key {code:?} must return to MainMenu");
+            assert_eq!(
+                app.current_view,
+                CurrentView::MainMenu,
+                "key {code:?} must return to MainMenu"
+            );
             assert_eq!(
                 app.selected_planet_index,
                 Tier::Tier3SpanishOrthography.index(),
@@ -481,6 +543,166 @@ mod tests {
     }
 
     #[test]
+    fn test_mainmenu_left_right_move_planet_horizontally() {
+        // D11 nav remap: Left/h move one planet left, Right/l one planet
+        // right, saturating at the band edges. Right no longer opens the
+        // lesson list (Enter keeps that job), and a saturating key at an
+        // edge starts no ship travel.
+        let mut app = App::new();
+        app.user_progress = UserProgress::default();
+        app.selected_planet_index = 3;
+        app.ship = crate::tui::animation::ShipAnimation::new(3);
+
+        for code in [KeyCode::Left, KeyCode::Char('h')] {
+            app.selected_planet_index = 3;
+            app.ship = crate::tui::animation::ShipAnimation::new(3);
+            EventHandler::handle_key(&mut app, key(code));
+            assert_eq!(app.selected_planet_index, 2, "key {code:?} must move left");
+            app.ship.complete();
+        }
+        for code in [KeyCode::Right, KeyCode::Char('l')] {
+            app.selected_planet_index = 2;
+            app.ship = crate::tui::animation::ShipAnimation::new(2);
+            EventHandler::handle_key(&mut app, key(code));
+            assert_eq!(app.selected_planet_index, 3, "key {code:?} must move right");
+            app.ship.complete();
+        }
+        assert_eq!(
+            app.current_view,
+            CurrentView::MainMenu,
+            "Right must no longer open the lesson list"
+        );
+
+        // Saturating edges: index clamps and the ship stays idle (travel
+        // only starts when the selection actually changes).
+        app.selected_planet_index = 0;
+        app.ship = crate::tui::animation::ShipAnimation::new(0);
+        EventHandler::handle_key(&mut app, key(KeyCode::Left));
+        assert_eq!(app.selected_planet_index, 0);
+        assert!(
+            app.ship.is_idle(),
+            "Left at the band's left edge must not travel"
+        );
+
+        app.selected_planet_index = 6;
+        app.ship = crate::tui::animation::ShipAnimation::new(6);
+        EventHandler::handle_key(&mut app, key(KeyCode::Right));
+        assert_eq!(app.selected_planet_index, 6);
+        assert!(
+            app.ship.is_idle(),
+            "Right at the band's right edge must not travel"
+        );
+    }
+
+    #[test]
+    fn test_mainmenu_up_down_jk_are_noops() {
+        // D11: the horizontal band has no vertical planet axis, so
+        // Up/Down/j/k are unmapped in MainMenu — no selection change, no
+        // travel, no view change.
+        for code in [
+            KeyCode::Up,
+            KeyCode::Down,
+            KeyCode::Char('j'),
+            KeyCode::Char('k'),
+        ] {
+            let mut app = App::new();
+            app.user_progress = UserProgress::default();
+            app.selected_planet_index = 3;
+            app.ship = crate::tui::animation::ShipAnimation::new(3);
+
+            EventHandler::handle_key(&mut app, key(code));
+
+            assert_eq!(
+                app.selected_planet_index, 3,
+                "key {code:?} must not move the selection"
+            );
+            assert!(app.ship.is_idle(), "key {code:?} must not start a travel");
+            assert_eq!(
+                app.current_view,
+                CurrentView::MainMenu,
+                "key {code:?} must not change the view"
+            );
+        }
+    }
+
+    #[test]
+    fn test_mainmenu_home_end_preserved() {
+        // D11: Home/g and End/G keep their band-jump meaning across the
+        // horizontal remap.
+        let mut app = App::new();
+        app.user_progress = UserProgress::default();
+        app.selected_planet_index = 4;
+        app.ship = crate::tui::animation::ShipAnimation::new(4);
+
+        for code in [KeyCode::Home, KeyCode::Char('g')] {
+            EventHandler::handle_key(&mut app, key(code));
+            assert_eq!(
+                app.selected_planet_index, 0,
+                "key {code:?} must jump to the band's left end"
+            );
+            app.ship.complete();
+            app.selected_planet_index = 4;
+            app.ship = crate::tui::animation::ShipAnimation::new(4);
+        }
+        for code in [KeyCode::End, KeyCode::Char('G')] {
+            EventHandler::handle_key(&mut app, key(code));
+            assert_eq!(
+                app.selected_planet_index, 6,
+                "key {code:?} must jump to the band's right end"
+            );
+            app.ship.complete();
+            app.selected_planet_index = 4;
+            app.ship = crate::tui::animation::ShipAnimation::new(4);
+        }
+    }
+
+    #[test]
+    fn test_mainmenu_wheel_scrolls_band() {
+        // D11: the wheel scrolls the horizontal band — ScrollUp/ScrollLeft
+        // move left, ScrollDown/ScrollRight move right.
+        let mut app = App::new();
+        app.user_progress = UserProgress::default();
+        app.selected_planet_index = 3;
+        app.ship = crate::tui::animation::ShipAnimation::new(3);
+        let area = Rect::new(0, 0, 120, 40);
+
+        EventHandler::handle_mouse(
+            &mut app,
+            mouse(MouseEventKind::ScrollUp, Position::new(10, 10)),
+            area,
+        )
+        .unwrap();
+        assert_eq!(app.selected_planet_index, 2, "ScrollUp must move left");
+        app.ship.complete();
+
+        EventHandler::handle_mouse(
+            &mut app,
+            mouse(MouseEventKind::ScrollLeft, Position::new(10, 10)),
+            area,
+        )
+        .unwrap();
+        assert_eq!(app.selected_planet_index, 1, "ScrollLeft must move left");
+        app.ship.complete();
+
+        EventHandler::handle_mouse(
+            &mut app,
+            mouse(MouseEventKind::ScrollDown, Position::new(10, 10)),
+            area,
+        )
+        .unwrap();
+        assert_eq!(app.selected_planet_index, 2, "ScrollDown must move right");
+        app.ship.complete();
+
+        EventHandler::handle_mouse(
+            &mut app,
+            mouse(MouseEventKind::ScrollRight, Position::new(10, 10)),
+            area,
+        )
+        .unwrap();
+        assert_eq!(app.selected_planet_index, 3, "ScrollRight must move right");
+    }
+
+    #[test]
     fn test_practice_esc_returns_to_planetlessons_of_tier() {
         let mut app = App::new();
         app.user_progress = UserProgress::default();
@@ -495,7 +717,10 @@ mod tests {
         EventHandler::handle_key(&mut app, key(KeyCode::Esc));
 
         assert_eq!(app.current_view, CurrentView::PlanetLessons);
-        assert_eq!(app.selected_planet_index, Tier::Tier3SpanishOrthography.index());
+        assert_eq!(
+            app.selected_planet_index,
+            Tier::Tier3SpanishOrthography.index()
+        );
     }
 
     #[test]
@@ -503,26 +728,35 @@ mod tests {
         let mut app = App::new();
         app.selected_planet_index = 0;
         app.ship = crate::tui::animation::ShipAnimation::new(0);
-        app.move_planet_down();
+        app.move_planet_right();
         // No time has elapsed yet, so without the skip guard the ship would
         // still be interpolating from 0.0 (its `from`) when the next travel
         // retargets it.
-        assert_eq!(app.ship.phase(), crate::tui::animation::ShipPhase::Traveling);
+        assert_eq!(
+            app.ship.phase(),
+            crate::tui::animation::ShipPhase::Traveling
+        );
         assert!((app.ship.position() - 0.0).abs() < 1e-5);
 
-        EventHandler::handle_key(&mut app, key(KeyCode::Down));
+        EventHandler::handle_key(&mut app, key(KeyCode::Right));
 
         // The guard must complete the FIRST travel (snapping to planet 1)
         // before the key's own navigation starts a second travel (toward
         // planet 2); the new travel's `from` proves the snap happened,
         // instead of continuing to interpolate from the stale 0.0 origin.
-        assert_eq!(app.ship.phase(), crate::tui::animation::ShipPhase::Traveling);
+        assert_eq!(
+            app.ship.phase(),
+            crate::tui::animation::ShipPhase::Traveling
+        );
         assert!(
             (app.ship.position() - 1.0).abs() < 1e-5,
             "expected the completed first hop (1.0) as the new travel's origin, got {}",
             app.ship.position()
         );
-        assert_eq!(app.selected_planet_index, 2, "the key itself must still be processed");
+        assert_eq!(
+            app.selected_planet_index, 2,
+            "the key itself must still be processed"
+        );
     }
 
     #[test]
@@ -609,22 +843,57 @@ mod tests {
         // stats/audio wiring, already covered indirectly by
         // `test_return_from_session_adaptive_drill_goes_to_star_map` in `app.rs`.
         let cases: Vec<(&str, usize, KeyEvent, MenuEffect)> = vec![
-            ("Down", 0, key(KeyCode::Down), MenuEffect::PlanetIndex(1)),
-            ("j", 0, key(KeyCode::Char('j')), MenuEffect::PlanetIndex(1)),
-            ("Up", 3, key(KeyCode::Up), MenuEffect::PlanetIndex(2)),
-            ("k", 3, key(KeyCode::Char('k')), MenuEffect::PlanetIndex(2)),
+            // D11 horizontal band nav: Left/h and Right/l pan the band;
+            // Up/Down/j/k are deliberately unmapped no-ops.
+            ("Left", 3, key(KeyCode::Left), MenuEffect::PlanetIndex(2)),
+            ("h", 3, key(KeyCode::Char('h')), MenuEffect::PlanetIndex(2)),
+            ("Right", 2, key(KeyCode::Right), MenuEffect::PlanetIndex(3)),
+            ("l", 2, key(KeyCode::Char('l')), MenuEffect::PlanetIndex(3)),
+            ("Up", 3, key(KeyCode::Up), MenuEffect::PlanetIndex(3)),
+            ("Down", 3, key(KeyCode::Down), MenuEffect::PlanetIndex(3)),
+            ("j", 3, key(KeyCode::Char('j')), MenuEffect::PlanetIndex(3)),
+            ("k", 3, key(KeyCode::Char('k')), MenuEffect::PlanetIndex(3)),
             ("End", 0, key(KeyCode::End), MenuEffect::PlanetIndex(6)),
             ("G", 0, key(KeyCode::Char('G')), MenuEffect::PlanetIndex(6)),
             ("Home", 4, key(KeyCode::Home), MenuEffect::PlanetIndex(0)),
             ("g", 4, key(KeyCode::Char('g')), MenuEffect::PlanetIndex(0)),
-            ("Right", 2, key(KeyCode::Right), MenuEffect::View(CurrentView::PlanetLessons)),
-            ("l", 2, key(KeyCode::Char('l')), MenuEffect::View(CurrentView::PlanetLessons)),
-            ("e", 0, key(KeyCode::Char('e')), MenuEffect::View(CurrentView::Stats)),
-            ("v", 0, key(KeyCode::Char('v')), MenuEffect::View(CurrentView::Dictation)),
-            ("b", 0, key(KeyCode::Char('b')), MenuEffect::View(CurrentView::History)),
-            ("B", 0, key(KeyCode::Char('B')), MenuEffect::View(CurrentView::History)),
+            (
+                "Enter",
+                2,
+                key(KeyCode::Enter),
+                MenuEffect::View(CurrentView::PlanetLessons),
+            ),
+            (
+                "e",
+                0,
+                key(KeyCode::Char('e')),
+                MenuEffect::View(CurrentView::Stats),
+            ),
+            (
+                "v",
+                0,
+                key(KeyCode::Char('v')),
+                MenuEffect::View(CurrentView::Dictation),
+            ),
+            (
+                "b",
+                0,
+                key(KeyCode::Char('b')),
+                MenuEffect::View(CurrentView::History),
+            ),
+            (
+                "B",
+                0,
+                key(KeyCode::Char('B')),
+                MenuEffect::View(CurrentView::History),
+            ),
             ("q", 0, key(KeyCode::Char('q')), MenuEffect::Quit),
-            ("Ctrl+c", 0, KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL), MenuEffect::Quit),
+            (
+                "Ctrl+c",
+                0,
+                KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
+                MenuEffect::Quit,
+            ),
         ];
 
         for (label, start_index, evt, effect) in cases {
@@ -635,7 +904,7 @@ mod tests {
             EventHandler::handle_key(&mut app, evt);
             // Deferred view switch: a uniform advance is safe for every case
             // — it completes in-flight travels (landing the assertions on the
-            // snap target) and commits the dock for the Right/l enter cases.
+            // snap target) and commits the dock for the Enter case.
             app.advance_animation(
                 crate::tui::animation::DESCEND + std::time::Duration::from_millis(1),
             );
@@ -649,7 +918,10 @@ mod tests {
                     app.current_view, expected,
                     "key {label} ({evt:?}) must set current_view to {expected:?}"
                 ),
-                MenuEffect::Quit => assert!(app.should_quit, "key {label} ({evt:?}) must set should_quit"),
+                MenuEffect::Quit => assert!(
+                    app.should_quit,
+                    "key {label} ({evt:?}) must set should_quit"
+                ),
             }
         }
     }
@@ -669,13 +941,21 @@ mod tests {
             .into_iter()
             .filter(|l| l.tier == Tier::Tier1Foundation)
             .collect();
-        let first_idx = App::new().flat_index_of(&tier1_lessons.first().unwrap().id).unwrap();
-        let last_idx = App::new().flat_index_of(&tier1_lessons.last().unwrap().id).unwrap();
+        let first_idx = App::new()
+            .flat_index_of(&tier1_lessons.first().unwrap().id)
+            .unwrap();
+        let last_idx = App::new()
+            .flat_index_of(&tier1_lessons.last().unwrap().id)
+            .unwrap();
 
         // Enter starts practice on the currently selected lesson.
         let mut app = enter_tier1();
         EventHandler::handle_key(&mut app, key(KeyCode::Enter));
-        assert_eq!(app.current_view, CurrentView::Practice, "Enter must start practice");
+        assert_eq!(
+            app.current_view,
+            CurrentView::Practice,
+            "Enter must start practice"
+        );
 
         // PageDown / Ctrl+f / Ctrl+d advance the selection by PAGE_SIZE, clamped to the tier's last lesson.
         for evt in [
@@ -713,7 +993,10 @@ mod tests {
         for evt in [key(KeyCode::End), key(KeyCode::Char('G'))] {
             let mut app = enter_tier1();
             EventHandler::handle_key(&mut app, evt);
-            assert_eq!(app.selected_lesson_index, last_idx, "key {evt:?} must select the tier's last lesson");
+            assert_eq!(
+                app.selected_lesson_index, last_idx,
+                "key {evt:?} must select the tier's last lesson"
+            );
         }
 
         // Home / g jump to the first lesson of the tier.
@@ -721,7 +1004,10 @@ mod tests {
             let mut app = enter_tier1();
             app.selected_lesson_index = last_idx;
             EventHandler::handle_key(&mut app, evt);
-            assert_eq!(app.selected_lesson_index, first_idx, "key {evt:?} must select the tier's first lesson");
+            assert_eq!(
+                app.selected_lesson_index, first_idx,
+                "key {evt:?} must select the tier's first lesson"
+            );
         }
     }
 }

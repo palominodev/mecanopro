@@ -406,13 +406,17 @@ impl App {
         self.ship.snap_to(self.selected_planet_index);
     }
 
-    pub fn move_planet_up(&mut self) {
+    /// Moves the selection one planet to the left (toward Tier 1, the
+    /// band's left edge), saturating without wrap.
+    pub fn move_planet_left(&mut self) {
         let before = self.selected_planet_index;
         self.selected_planet_index = self.selected_planet_index.saturating_sub(1);
         self.travel_ship_if_changed(before);
     }
 
-    pub fn move_planet_down(&mut self) {
+    /// Moves the selection one planet to the right (toward Tier 7, the
+    /// band's right edge), saturating without wrap.
+    pub fn move_planet_right(&mut self) {
         let before = self.selected_planet_index;
         let max = Tier::ALL.len() - 1;
         self.selected_planet_index = (self.selected_planet_index + 1).min(max);
@@ -819,21 +823,21 @@ mod tests {
     }
 
     #[test]
-    fn test_move_planet_up_down_no_wrap_saturating() {
+    fn test_move_planet_left_right_no_wrap_saturating() {
         let mut app = App::new();
 
         app.selected_planet_index = 0;
-        app.move_planet_up();
+        app.move_planet_left();
         assert_eq!(app.selected_planet_index, 0);
 
         app.selected_planet_index = 6;
-        app.move_planet_down();
+        app.move_planet_right();
         assert_eq!(app.selected_planet_index, 6);
 
         app.selected_planet_index = 3;
-        app.move_planet_up();
+        app.move_planet_left();
         assert_eq!(app.selected_planet_index, 2);
-        app.move_planet_down();
+        app.move_planet_right();
         assert_eq!(app.selected_planet_index, 3);
     }
 
@@ -866,7 +870,7 @@ mod tests {
         app.selected_planet_index = 0;
         app.ship = crate::tui::animation::ShipAnimation::new(0);
 
-        app.move_planet_down();
+        app.move_planet_right();
         assert!(!app.ship.is_idle());
 
         app.advance_animation(std::time::Duration::from_secs(1));
@@ -892,7 +896,7 @@ mod tests {
         app.selected_planet_index = 0;
         app.ship = crate::tui::animation::ShipAnimation::new(0);
 
-        app.move_planet_down();
+        app.move_planet_right();
 
         assert_eq!(app.ship.phase(), crate::tui::animation::ShipPhase::Traveling);
         app.ship.complete();
