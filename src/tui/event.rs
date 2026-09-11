@@ -1,5 +1,5 @@
 use crate::tui::app::{App, CurrentView};
-use crate::tui::planet_layout::{display_index_of, lesson_row_at, planet_at, viewport_start};
+use crate::tui::planet_layout::{band_viewport_start, display_index_of, lesson_row_at, planet_at};
 use crate::tui::ui::{lesson_list_area, map_body_area};
 use crossterm::event::{
     self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
@@ -45,7 +45,8 @@ impl EventHandler {
             let pos = Position::new(m.column, m.row);
             match app.current_view {
                 CurrentView::MainMenu => {
-                    if let Some(i) = planet_at(map_body_area(area), pos) {
+                    if let Some(i) = planet_at(map_body_area(area), pos, app.selected_planet_index)
+                    {
                         app.selected_planet_index = i;
                         app.ship.snap_to(i);
                         app.enter_planet_lessons();
@@ -88,7 +89,7 @@ impl EventHandler {
         let list_area = lesson_list_area(area);
         let capacity = list_area.height.saturating_sub(2) as usize;
         let selected_display = display_index_of(&rows, app.selected_lesson_index).unwrap_or(0);
-        let start = viewport_start(selected_display, capacity);
+        let start = band_viewport_start(selected_display, capacity);
 
         if let Some(flat) = lesson_row_at(list_area, start, &rows, row) {
             if flat == app.selected_lesson_index {
@@ -249,7 +250,7 @@ mod tests {
         let mut app = App::new();
         app.user_progress = UserProgress::default();
         let area = Rect::new(0, 0, 120, 40);
-        let cards = planet_layout(map_body_area(area));
+        let cards = planet_layout(map_body_area(area), app.selected_planet_index);
         let card = cards[3];
         let pos = Position::new(card.x + card.width / 2, card.y + card.height / 2);
 
@@ -332,7 +333,7 @@ mod tests {
         assert_eq!(app.ship.phase(), crate::tui::animation::ShipPhase::Traveling);
 
         let area = Rect::new(0, 0, 120, 40);
-        let cards = planet_layout(map_body_area(area));
+        let cards = planet_layout(map_body_area(area), 1);
         let card = cards[3];
         let pos = Position::new(card.x + card.width / 2, card.y + card.height / 2);
         EventHandler::handle_mouse(&mut app, left_click(pos), area).unwrap();
@@ -377,7 +378,7 @@ mod tests {
     #[test]
     fn test_non_click_mouse_kinds_ignored() {
         let area = Rect::new(0, 0, 120, 40);
-        let cards = planet_layout(map_body_area(area));
+        let cards = planet_layout(map_body_area(area), Tier::Tier2FullAlphabet.index());
         let card = cards[3];
         let pos = Position::new(card.x + card.width / 2, card.y + card.height / 2);
 

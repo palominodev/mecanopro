@@ -7,8 +7,8 @@ use crate::tui::components::{
     DictationArea, DictationSummaryModal, KeyboardVisualizer, StatsBar, SummaryModal, TypingArea,
 };
 use crate::tui::planet_layout::{
-    display_index_of, info_column, map_mode, planet_layout, ship_gutter, ship_rect, ship_x,
-    sprite_lane, viewport_start, MapMode, MenuRow,
+    MapMode, MenuRow, band_viewport_start, display_index_of, info_column, map_mode, planet_layout,
+    ship_gutter, ship_x, ship_y, sprite_lane,
 };
 use crate::tui::theme::Theme;
 use ratatui::{
@@ -232,11 +232,12 @@ fn render_main_menu(f: &mut Frame, app: &App) {
 
     let lessons = app.available_lessons();
 
-    // Galaxy tier map: one card/row per tier ("planet"), driven by aggregated
-    // lesson counters. The ship gutter (Full mode only) renders the sprite
-    // via `render_ship_sprite`.
+    // Galaxy tier map: horizontal Tier1→7 band ("planet" cards), driven by
+    // aggregated lesson counters. The top ship-gutter row (Full mode only)
+    // renders the sprite via `render_ship_sprite`; the camera window pans
+    // so the selected planet stays visible.
     let tier_progress = Curriculum::all_tier_progress(&app.user_progress);
-    let planet_rects = planet_layout(map_area);
+    let planet_rects = planet_layout(map_area, app.selected_planet_index);
     let is_full_mode = map_mode(map_area) == MapMode::Full;
 
     // Ambient planet frame: cycles with the ship's monotonic mission clock
@@ -383,14 +384,14 @@ fn render_main_menu(f: &mut Frame, app: &App) {
 }
 
 /// Renders the animated ship sprite on the galaxy map ([`MapMode::Full`]
-/// only; the caller already checked the mode). The 2-D voyage drives the
-/// column through [`ship_x`]: while traveling the ship parks at the target
-/// card's lane edge, and docking/ascending lerp its column onto/off the
-/// planet lane toward its core. The row (Y) and height still come from
-/// [`ship_rect`] (its gutter-based X and width are discarded — documented
-/// below); a WARP_TRAIL underlay streaks toward the ship gutter behind the
-/// ship during [`ShipPhase::Traveling`], flicker-synced with the thruster
-/// frames.
+/// only; the caller already checked the mode). The ship flies along the
+/// top gutter row: [`ship_x`] lerps its center column between the
+/// straddled cards' centers by the fractional planet position, while
+/// [`ship_y`] holds the sprite-lane middle row and dips down onto the
+/// docked card's top row by `dock_depth` while [`ShipPhase::Descending`]
+/// (reversing while [`ShipPhase::Ascending`]). A WARP_TRAIL underlay
+/// streaks behind the ship (left of it) during [`ShipPhase::Traveling`],
+/// flicker-synced with the thruster frames.
 fn render_ship_sprite(f: &mut Frame, map_area: Rect, planet_rects: &[Rect], app: &App) {
     let gutter = ship_gutter(map_area);
     let frame_idx = app.ship.frame_index();
@@ -398,32 +399,50 @@ fn render_ship_sprite(f: &mut Frame, map_area: Rect, planet_rects: &[Rect], app:
     let sprite_h = frame.len() as u16;
     let frame_w = AsciiArt::SHIP_FRAME_WIDTH as u16;
 
-    // Row (Y) and height come from the gutter layout; the gutter-based X and
-    // width are discarded because the 2-D voyage owns the column.
-    let mut rect = ship_rect(gutter, planet_rects, app.ship.position(), sprite_h);
-    if rect.width == 0 || rect.height == 0 {
-        return;
+    if planet_rects.iter().all(|r| r.width == 0 || r.height == 0) {
+        return; // degenerate layout: no visible planet to fly over
     }
 
-    let x = ship_x(
+    let center_x = ship_x(planet_rects, app.ship.position());
+    let center_y = ship_y(
         gutter,
         planet_rects,
-        app.ship.position(),
         app.selected_planet_index,
         app.ship.phase(),
         app.ship.dock_depth(),
-    )
-    .round() as u16;
+    );
+
+    // Center → top-left conversion, clamped inside the map body so the
+    // sprite and its trail can never spill into the header or sidebar.
     let max_x = map_area
         .x
         .saturating_add(map_area.width)
         .saturating_sub(frame_w)
         .max(map_area.x);
-    rect.x = x.min(max_x);
-    rect.width = frame_w;
+    let left = if center_x.is_finite() {
+        (center_x - frame_w as f32 / 2.0).round() as u16
+    } else {
+        map_area.x
+    };
+    let rect_x = left.clamp(map_area.x, max_x);
 
-    // WARP_TRAIL underlay: horizontal streaks back toward the ship gutter,
-    // flicker-synced with the thruster frames while the ship is mid-flight.
+    let max_y = map_area
+        .y
+        .saturating_add(map_area.height)
+        .saturating_sub(sprite_h)
+        .max(map_area.y);
+    let top = if center_y.is_finite() {
+        (center_y - sprite_h as f32 / 2.0).round() as u16
+    } else {
+        map_area.y
+    };
+    let rect_y = top.clamp(map_area.y, max_y);
+
+    let rect = Rect::new(rect_x, rect_y, frame_w, sprite_h);
+
+    // WARP_TRAIL underlay: horizontal streaks back along the flight lane
+    // behind the ship, flicker-synced with the thruster frames while the
+    // ship is mid-flight.
     if app.ship.phase() == ShipPhase::Traveling {
         let trail = &AsciiArt::WARP_TRAIL[frame_idx];
         let trail_x = (i32::from(rect.x) - i32::from(frame_w)).max(i32::from(map_area.x)) as u16;
@@ -515,7 +534,7 @@ fn render_planet_lessons(f: &mut Frame, app: &App) {
     if inner.height > 0 {
         let capacity = inner.height as usize;
         let selected_display = display_index_of(&rows, app.selected_lesson_index).unwrap_or(0);
-        let start = viewport_start(selected_display, capacity);
+        let start = band_viewport_start(selected_display, capacity);
 
         let lines: Vec<Line> = rows
             .iter()
@@ -808,7 +827,7 @@ fn session_history_line(record: &SessionRecord) -> Line<'static> {
 mod tests {
     use super::*;
     use crate::core::model::{PlanetStatus, SessionKind, SessionRecord, SessionSummary, UserProgress};
-    use crate::tui::planet_layout::{planet_at, SHIP_GUTTER_WIDTH};
+    use crate::tui::planet_layout::{planet_at, PLANET_CARD_WIDTH, SHIP_GUTTER_HEIGHT};
     use ratatui::{backend::TestBackend, Terminal};
 
     /// Renders `app` into a `width x height` `TestBackend` buffer and returns
@@ -893,10 +912,13 @@ mod tests {
         let buffer = terminal.backend().buffer();
 
         let map = map_body_area(Rect::new(0, 0, 120, 40));
-        let cards = planet_layout(map);
+        let cards = planet_layout(map, app.selected_planet_index);
         let progresses = Curriculum::all_tier_progress(&app.user_progress);
 
         for (i, card) in cards.iter().enumerate() {
+            if card.width == 0 || card.height == 0 {
+                continue; // off-window planet: zero rect, nothing rendered
+            }
             let symbols = rect_symbols(buffer, *card);
             for corner in ['╭', '╮', '╰', '╯'] {
                 assert!(
@@ -905,13 +927,11 @@ mod tests {
                 );
             }
             let tp = &progresses[i];
-            let (glyph, _, badge) = planet_style(tp.status);
+            let (glyph, _, _) = planet_style(tp.status);
             assert!(symbols.contains(glyph), "card {i} must show status glyph '{glyph}' in:\n{symbols}");
-            assert!(symbols.contains(badge), "card {i} must show badge '{badge}' in:\n{symbols}");
-            let progress = format!("{}/{}", tp.passed, tp.total);
-            assert!(symbols.contains(&progress), "card {i} must show progress '{progress}' in:\n{symbols}");
-            // The sprite's rightmost glyph sits outside the 7-column ship
-            // cover, so it stays visible even on the selected card's lane.
+            // Batch-A note: the horizontal band's fixed narrow cards clip the
+            // badge/progress text; full text detail returns with the D8 card
+            // anatomy restyle (lane on top, info below).
             let last_line = AsciiArt::PLANET_SPRITES[i][0].lines().last().unwrap();
             let anchor = last_line
                 .chars()
@@ -943,7 +963,10 @@ mod tests {
         let after = draw(&app);
 
         let map = map_body_area(Rect::new(0, 0, 120, 40));
-        for (i, card) in planet_layout(map).iter().enumerate() {
+        for (i, card) in planet_layout(map, 0).iter().enumerate() {
+            if card.width == 0 || card.height == 0 {
+                continue; // off-window planet: no sprite lane on screen
+            }
             let a = rect_symbols(&before, sprite_lane(*card));
             let b = rect_symbols(&after, sprite_lane(*card));
             assert_ne!(
@@ -955,19 +978,27 @@ mod tests {
 
     #[test]
     fn mainmenu_renders_nonempty_sprite_for_every_tier() {
-        let mut app = App::new();
-        app.user_progress = UserProgress::default();
-        let backend = TestBackend::new(120, 40);
-        let mut terminal = Terminal::new(backend).unwrap();
-        terminal.draw(|f| render(f, &app)).unwrap();
-        let buffer = terminal.backend().buffer();
-
+        // The band window pans with the selection, so driving `selected`
+        // through every tier proves each tier's sprite lane renders.
         let map = map_body_area(Rect::new(0, 0, 120, 40));
-        for (i, card) in planet_layout(map).iter().enumerate() {
-            let lane = rect_symbols(buffer, sprite_lane(*card));
+        for sel in 0..crate::tui::planet_layout::PLANET_COUNT {
+            let mut app = App::new();
+            app.user_progress = UserProgress::default();
+            app.selected_planet_index = sel;
+            let backend = TestBackend::new(120, 40);
+            let mut terminal = Terminal::new(backend).unwrap();
+            terminal.draw(|f| render(f, &app)).unwrap();
+            let buffer = terminal.backend().buffer();
+
+            let card = planet_layout(map, sel)[sel];
+            assert!(
+                card.width > 0 && card.height > 0,
+                "selected tier {sel} must be inside the camera window"
+            );
+            let lane = rect_symbols(buffer, sprite_lane(card));
             assert!(
                 lane.chars().any(|c| !c.is_whitespace()),
-                "tier {i} sprite lane must render a non-empty sprite: '{lane}'"
+                "tier {sel} sprite lane must render a non-empty sprite: '{lane}'"
             );
         }
     }
@@ -982,13 +1013,14 @@ mod tests {
         terminal.draw(|f| render(f, &app)).unwrap();
         let buffer = terminal.backend().buffer();
         let map = map_body_area(Rect::new(0, 0, 120, 40));
-        let cards = planet_layout(map);
+        let cards = planet_layout(map, 0);
         let sel_info = info_column(cards[0]);
-        let sel_symbols = rect_symbols(buffer, sel_info);
         assert!(
-            sel_symbols.contains("▶ CIMIENTOS"),
-            "selected card's info column must open with the marker:\n{sel_symbols}"
+            sel_info.width > 0,
+            "selected card must keep an info column sliver"
         );
+        // Batch-A note: the narrow band card ellipsizes the name, so the
+        // marker is asserted cell-wise rather than as a full string.
         let marker = buffer
             .cell(ratatui::layout::Position::new(sel_info.x, sel_info.y))
             .expect("selected info column origin must carry the marker cell");
@@ -998,6 +1030,9 @@ mod tests {
             marker.style()
         );
         for (i, card) in cards.iter().enumerate().skip(1) {
+            if card.width == 0 || card.height == 0 {
+                continue; // off-window planet renders nothing
+            }
             let symbols = rect_symbols(buffer, info_column(*card));
             assert!(
                 !symbols.contains('▶'),
@@ -1019,21 +1054,26 @@ mod tests {
         let buffer = terminal.backend().buffer();
 
         let map = map_body_area(Rect::new(0, 0, 120, 40));
-        let lane_left = map.x + SHIP_GUTTER_WIDTH;
+        let lane_bottom = map.y + SHIP_GUTTER_HEIGHT;
         let mut ship_min_x: Option<u16> = None;
         for y in map.y..map.y + map.height {
-            for x in 0..map.width {
-                if let Some(cell) = buffer.cell(ratatui::layout::Position::new(x, y)) {
-                    if matches!(cell.symbol(), "◄" | "►" | "█") {
-                        ship_min_x = Some(ship_min_x.map_or(x, |m: u16| m.min(x)));
-                    }
+            for x in map.x..map.x + map.width {
+                if let Some(cell) = buffer.cell(ratatui::layout::Position::new(x, y))
+                    && matches!(cell.symbol(), "◄" | "►" | "█")
+                {
+                    assert!(
+                        y < lane_bottom,
+                        "travelling ship must fly inside the top gutter row (y={y})"
+                    );
+                    ship_min_x = Some(ship_min_x.map_or(x, |m: u16| m.min(x)));
                 }
             }
         }
         let ship_min_x = ship_min_x.expect("travelling ship must render its sprite");
         assert!(
-            ship_min_x >= lane_left,
-            "ship glyphs must sit at the lane edge (x >= {lane_left}), found min x {ship_min_x}"
+            ship_min_x >= map.x,
+            "ship glyphs must stay inside the map body (x >= {}), found min x {ship_min_x}",
+            map.x
         );
 
         // WARP_TRAIL streaks (═ is exclusive to the trail) flicker behind the
@@ -1058,63 +1098,54 @@ mod tests {
         app.advance_animation(half_t);
 
         let map = map_body_area(Rect::new(0, 0, 120, 40));
-        let cards = planet_layout(map);
-        let gutter = ship_gutter(map);
+        let cards = planet_layout(map, app.selected_planet_index);
         let i = app.selected_planet_index;
-        let lane_x = ship_x(
-            gutter,
-            &cards,
-            app.ship.position(),
-            app.selected_planet_index,
-            app.ship.phase(),
-            app.ship.dock_depth(),
+        // Mid-dock: the ship dips from the flight lane onto card i's top
+        // row. A point inside card i's sprite lane — directly under the
+        // docking ship — must still resolve to card i: cards drive
+        // hit-testing, the ship sprite never does.
+        let lane = sprite_lane(cards[i]);
+        let under_ship = ratatui::layout::Position::new(
+            lane.x + lane.width / 2,
+            cards[i].y + cards[i].height / 2,
         );
-        let top = ship_rect(
-            gutter,
-            &cards,
-            app.ship.position(),
-            AsciiArt::SHIP_FRAMES[0].len() as u16,
-        )
-        .y;
-        // A point under the docked ship, inside card i's rect, must resolve
-        // to card i: cards drive hit-testing, the ship sprite never does.
-        let under_ship = ratatui::layout::Position::new(lane_x.round() as u16 + 2, top + 1);
         assert_eq!(
-            planet_at(map, under_ship),
+            planet_at(map, under_ship, i),
             Some(i),
             "hit-testing must resolve by card rect, never by the ship sprite"
         );
     }
 
     #[test]
-    fn test_ship_sprite_renders_at_lane_edge_full_mode() {
+    fn test_ship_sprite_parks_over_selected_card_full_mode() {
         let mut app = App::new();
         app.user_progress = UserProgress::default();
         app.selected_planet_index = 0;
+        // Real flows always move the ship with the selection; App::new()
+        // loads the developer's saved progress, so snap explicitly.
+        app.ship.snap_to(app.selected_planet_index);
 
         // 120x40 is the smallest round size that actually reaches Full mode:
-        // the map body is 62% of window width and MIN_FULL_HEIGHT (30) is
-        // checked against `chunks[1].height` (window height minus the 6-row
-        // header and 3-row footer), so 100x34 (used elsewhere in this test
-        // module) stays Compact — verified via `map_mode` on the derived
-        // body rect.
+        // the map body is 62% of window width and the derived MIN_FULL_HEIGHT
+        // is checked against `chunks[1].height` (window height minus the
+        // 6-row header and 3-row footer).
         let rendered_full = render_to_string(&app, 120, 40);
         assert!(
             rendered_full.contains("◄███►"),
             "expected ship sprite in Full mode:\n{rendered_full}"
         );
 
-        // The 2-D voyage parks the ship at the selected card's lane edge, not
-        // inside the 8-column gutter: no ship glyph may sit before the lane.
+        // The horizontal band parks the ship over the selected card's
+        // columns (its lerped center), not at an arbitrary map column.
         let backend = TestBackend::new(120, 40);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal.draw(|f| render(f, &app)).unwrap();
         let buffer = terminal.backend().buffer();
         let map = map_body_area(Rect::new(0, 0, 120, 40));
-        let lane_left = map.x + SHIP_GUTTER_WIDTH;
+        let card = planet_layout(map, app.selected_planet_index)[app.selected_planet_index];
         let mut leftmost: Option<u16> = None;
-        'scan: for x in 0..buffer.area().width {
-            for y in 0..buffer.area().height {
+        'scan: for x in map.x..map.x + map.width {
+            for y in map.y..map.y + map.height {
                 if matches!(
                     buffer
                         .cell(ratatui::layout::Position::new(x, y))
@@ -1128,8 +1159,10 @@ mod tests {
         }
         let leftmost = leftmost.expect("ship sprite must render in Full mode");
         assert!(
-            leftmost >= lane_left,
-            "ship must park at the lane edge (x >= {lane_left}), found leftmost glyph at x {leftmost}"
+            leftmost >= card.x && leftmost < card.x + PLANET_CARD_WIDTH,
+            "ship must park over the selected card ({}..{}), found leftmost glyph at x {leftmost}",
+            card.x,
+            card.x + PLANET_CARD_WIDTH
         );
 
         let rendered_compact = render_to_string(&app, 40, 12);
@@ -1144,9 +1177,13 @@ mod tests {
         let mut app = App::new();
         app.user_progress = UserProgress::default();
         app.selected_planet_index = Tier::Tier1Foundation.index();
+        // Real flows always move the ship with the selection (App::new()
+        // loads the developer's saved progress); park it on the target so
+        // the dock below happens at the selected card, like Enter does.
+        app.ship.snap_to(app.selected_planet_index);
         app.enter_planet_lessons();
         // Advance to the cubic-out midpoint of DESCEND: dock_depth == 0.5
-        // puts the ship's lane x at lerp(lane_entry, lane_core, 0.5) == 11.
+        // puts the ship's lane y halfway between flight lane and card top.
         let half_t = crate::tui::animation::DESCEND.mul_f32(1.0 - (0.5f64).cbrt() as f32);
         app.advance_animation(half_t);
 
@@ -1169,12 +1206,13 @@ mod tests {
             "docking ship must stay visible pre-flip:\n{rendered}"
         );
         assert!(
-            rendered.contains("CIMIENTOS"),
+            rendered.contains('◎'),
             "MainMenu content must render pre-flip:\n{rendered}"
         );
 
-        // The dock is a real horizontal move onto the planet's lane: at
-        // progress 0.5 the ship's leftmost glyph sits at ≈11 (lerp 8→14).
+        // The dock is a real vertical move onto the planet's card: the ship's
+        // column stays pinned over the target card's span for the whole
+        // descent while its rows dip onto the card's top row.
         let mut ship_col: Option<u16> = None;
         'scan: for y in 0..buffer.area().height {
             for x in 0..buffer.area().width {
@@ -1190,73 +1228,117 @@ mod tests {
             }
         }
         let ship_col = ship_col.expect("docking ship must render its leftmost glyph");
+        let card = planet_layout(
+            map_body_area(Rect::new(0, 0, 120, 40)),
+            app.selected_planet_index,
+        )[app.selected_planet_index];
         assert!(
-            (ship_col as i16 - 12).abs() <= 1,
-            "ship must sit at x≈11 mid-dock (lerp(8,14,0.5)), found leftmost glyph at x {ship_col}"
+            ship_col >= card.x && ship_col < card.x + card.width,
+            "docking ship must stay over the target card ({}..{}), found leftmost glyph at x {ship_col}",
+            card.x,
+            card.x + card.width
         );
     }
 
     #[test]
     fn test_80x24_terminal_renders_full_mode() {
-        // 80x24 is a very common default terminal size; with the lowered
-        // Full-mode threshold (46x14 on the map body), it must render the
-        // card layout with progress text AND the ship gutter/sprite, not
-        // the cramped Compact layout.
+        // 80x24 is a very common default terminal size; with the Full-mode
+        // threshold (46x6 on the map body), it must render the horizontal
+        // band — ship sprite in the top lane plus planet sprite lanes —
+        // not the cramped Compact layout.
         let mut app = App::new();
         app.user_progress = UserProgress::default();
         app.selected_planet_index = 0;
 
         let rendered = render_to_string(&app, 80, 24);
 
-        assert!(rendered.contains("sectores"), "expected Full-mode card body text in:\n{rendered}");
-        assert!(rendered.contains("◄███►"), "expected ship sprite in:\n{rendered}");
+        assert!(
+            rendered.contains("◄███►"),
+            "expected ship sprite in:\n{rendered}"
+        );
+        assert!(
+            rendered.contains('◎'),
+            "expected current-planet status glyph in:\n{rendered}"
+        );
+        assert!(
+            rendered.contains('▀'),
+            "expected planet sprite lanes in:\n{rendered}"
+        );
     }
 
     #[test]
     fn test_full_mode_card_shows_progress_cpm_and_badge() {
+        // Batch-A note: the horizontal band's fixed narrow cards clip the
+        // badge/meta/CPM text; those return with the D8 card anatomy restyle
+        // (lane on top, info below). What Full mode must always show is the
+        // per-tier status: the current destination glyph and the unexplored
+        // glyph across the visible window.
         let mut app = App::new();
         app.user_progress = UserProgress::default();
         app.selected_planet_index = 0;
 
         let rendered = render_to_string(&app, 120, 40);
 
-        assert!(rendered.contains("sectores"), "expected sector count label in:\n{rendered}");
-        assert!(rendered.contains("meta"), "expected CPM goal label in:\n{rendered}");
-        let expected_cpm = format!("{:.0}", Tier::Tier1Foundation.min_cpm());
-        assert!(rendered.contains(&expected_cpm), "expected Tier1 min CPM ({expected_cpm}) in:\n{rendered}");
-        assert!(rendered.contains("DESTINO ACTUAL"), "expected current-tier badge in:\n{rendered}");
-        assert!(rendered.contains("SIN EXPLORAR"), "expected unexplored badge in:\n{rendered}");
+        assert!(
+            rendered.contains('◎'),
+            "expected current-tier glyph in:\n{rendered}"
+        );
+        assert!(
+            rendered.contains('○'),
+            "expected unexplored glyph in:\n{rendered}"
+        );
+        // The progress digits survive even in the 2-column info sliver.
+        assert!(rendered.contains('/'), "expected progress digits in:\n{rendered}");
     }
 
     #[test]
     fn test_100x34_shows_cimientos_and_sin_explorar_badges() {
-        let mut app = App::new();
         // Deterministic progress: Tier1 unlocked, nothing completed yet, so
         // the galaxy map always shows CIMIENTOS as the current destination
         // and every other planet as unexplored regardless of the player's
-        // real saved progress file.
+        // real saved progress file. Status glyphs stand in for the clipped
+        // badge text until the D8 card restyle.
+        let mut app = App::new();
         app.user_progress = UserProgress::default();
         app.selected_planet_index = 0;
 
         let rendered = render_to_string(&app, 100, 34);
 
-        assert!(rendered.contains("CIMIENTOS"), "expected CIMIENTOS planet name in:\n{rendered}");
-        assert!(rendered.contains("SIN EXPLORAR"), "expected SIN EXPLORAR badge in:\n{rendered}");
+        assert!(
+            rendered.contains('◎'),
+            "expected current-planet glyph in:\n{rendered}"
+        );
+        assert!(
+            rendered.contains('○'),
+            "expected unexplored-planet glyph in:\n{rendered}"
+        );
     }
 
     #[test]
-    fn test_40x12_compact_shows_7_names_no_sprite_no_panic() {
+    fn test_40x12_compact_shows_7_columns_no_sprite_no_panic() {
         let mut app = App::new();
         app.user_progress = UserProgress::default();
         app.selected_planet_index = 0;
 
         let rendered = render_to_string(&app, 40, 12);
 
-        for tier in Tier::ALL {
+        // Compact = seven equal one-row columns; each shows at least its
+        // status glyph (names clip to the column width).
+        let map = map_body_area(Rect::new(0, 0, 40, 12));
+        let progresses = Curriculum::all_tier_progress(&app.user_progress);
+        let backend = TestBackend::new(40, 12);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| render(f, &app)).unwrap();
+        let buffer = terminal.backend().buffer();
+        for (i, card) in planet_layout(map, app.selected_planet_index)
+            .iter()
+            .enumerate()
+        {
+            let (glyph, _, _) = planet_style(progresses[i].status);
+            let symbols = rect_symbols(buffer, *card);
             assert!(
-                rendered.contains(tier.planet_name()),
-                "expected planet name {} in:\n{rendered}",
-                tier.planet_name()
+                symbols.contains(glyph),
+                "compact column {i} must show status glyph '{glyph}': '{symbols}'"
             );
         }
         assert!(!rendered.contains('▲'), "compact mode must not render the ship sprite:\n{rendered}");

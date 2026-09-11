@@ -6,29 +6,39 @@
 
 use crate::core::model::{Lesson, Section};
 use crate::tui::animation::ShipPhase;
-use ratatui::layout::{Constraint, Direction, Layout, Position, Rect};
+use ratatui::layout::{Position, Rect};
 
-/// Minimum terminal width (in columns) required to render the full galaxy
-/// map with a dedicated ship gutter. Lowered from 64 so common 80-column
-/// terminals reach Full mode (80 * 62% map-body split = 49 >= 46).
+/// Minimum map-body width (in columns) required to render the full galaxy
+/// map. Lowered from 64 so common 80-column terminals reach Full mode
+/// (80 * 62% map-body split ≈ 50 >= 46), where the fixed-step band shows
+/// ~3 planet cards.
 pub const MIN_FULL_WIDTH: u16 = 46;
-/// Minimum terminal height (in rows) required to render the full galaxy
-/// map with a dedicated ship gutter. Lowered from 30 so common 24-row
-/// terminals reach Full mode (24 - 9 header/footer rows = 15 >= 14).
-pub const MIN_FULL_HEIGHT: u16 = 14;
+/// Height (in rows) of the ship sprite ([`crate::tui::ascii::AsciiArt::SHIP_FRAMES`]
+/// is 3 rows tall); the horizontal band reserves exactly this many top rows
+/// as the ship's flight lane.
+pub const SHIP_GUTTER_HEIGHT: u16 = 3;
 /// Height (in rows) of a single planet card in [`MapMode::Full`].
 pub const PLANET_CARD_HEIGHT: u16 = 3;
-/// Width (in columns) of the ship gutter column in [`MapMode::Full`].
-pub const SHIP_GUTTER_WIDTH: u16 = 8;
+/// Minimum map-body height (in rows) required to render the full galaxy
+/// map: one ship-gutter row block plus one card row block.
+pub const MIN_FULL_HEIGHT: u16 = SHIP_GUTTER_HEIGHT + PLANET_CARD_HEIGHT;
+/// Width (in columns) of a single planet card in [`MapMode::Full`].
+/// Wide enough for the 12-column sprite lane plus a sliver of info.
+pub const PLANET_CARD_WIDTH: u16 = 14;
+/// Horizontal gap (in columns) between neighbor planet cards in
+/// [`MapMode::Full`]. With the card width this fixes the band step at 16
+/// columns: ~3 visible cards on an 80×24 terminal, 4 on 120×40.
+pub const PLANET_GAP: u16 = 2;
 /// Number of tiers/planets rendered on the galaxy map.
 pub const PLANET_COUNT: usize = 7;
 
 /// Rendering density for the galaxy map, selected from the available area.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MapMode {
-    /// Roomy layout: card-height planets plus a dedicated ship gutter.
+    /// Roomy layout: fixed-step planet cards left-to-right below a top
+    /// ship-gutter row, panned by a camera-follow window.
     Full,
-    /// Cramped layout: single-row planets, no gutter.
+    /// Cramped layout: seven single-row columns, no gutter.
     Compact,
 }
 
@@ -42,105 +52,147 @@ pub fn map_mode(area: Rect) -> MapMode {
     }
 }
 
-/// Computes the area available for the 7 planet cards, i.e. `area` minus
-/// the ship gutter column in [`MapMode::Full`].
-fn cards_area(area: Rect) -> Rect {
-    match map_mode(area) {
-        MapMode::Full => {
-            let chunks = Layout::default()
-                .direction(Direction::Horizontal)
-                .constraints([Constraint::Length(SHIP_GUTTER_WIDTH), Constraint::Min(0)])
-                .split(area);
-            chunks[1]
-        }
-        MapMode::Compact => area,
+/// How many fixed-step planet cards fully fit in `width` columns
+/// (never more than [`PLANET_COUNT`]).
+fn band_capacity(width: u16) -> usize {
+    if width < PLANET_CARD_WIDTH {
+        return 0;
+    }
+    let step = PLANET_CARD_WIDTH + PLANET_GAP;
+    1 + (width - PLANET_CARD_WIDTH) as usize / step as usize
+}
+
+/// First visible planet index so `selected` stays inside a window of
+/// `capacity` planets. `capacity == 0` always returns `0` (nothing is
+/// visible). Identical algorithm to the deleted `viewport_start`.
+pub fn band_viewport_start(selected: usize, capacity: usize) -> usize {
+    if capacity == 0 {
+        return 0;
+    }
+    if selected >= capacity {
+        selected + 1 - capacity
+    } else {
+        0
     }
 }
 
 /// Always returns exactly [`PLANET_COUNT`] rects, ordered Tier1..Tier7
-/// top-to-bottom. Never panics, even on degenerate (tiny or zero) areas.
-pub fn planet_layout(area: Rect) -> Vec<Rect> {
-    let card_height = match map_mode(area) {
-        MapMode::Full => PLANET_CARD_HEIGHT,
-        MapMode::Compact => 1,
-    };
-
-    let mut constraints: Vec<Constraint> = (0..PLANET_COUNT)
-        .map(|_| Constraint::Length(card_height))
-        .collect();
-    constraints.push(Constraint::Min(0));
-
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints(constraints)
-        .split(cards_area(area));
-
-    chunks[0..PLANET_COUNT].to_vec()
-}
-
-/// The ship gutter column in [`MapMode::Full`]; a zero-width [`Rect`] in
-/// [`MapMode::Compact`].
-pub fn ship_gutter(area: Rect) -> Rect {
+/// left-to-right. Full mode lays fixed-step cards
+/// ([`PLANET_CARD_WIDTH`] + [`PLANET_GAP`]) below the top ship-gutter row,
+/// panned so `selected` stays visible; planets outside the window are zero
+/// rects. Compact mode lays 7 equal one-row columns with no panning. Never
+/// panics, even on degenerate (tiny or zero) areas.
+pub fn planet_layout(area: Rect, selected: usize) -> Vec<Rect> {
     match map_mode(area) {
         MapMode::Full => {
-            let chunks = Layout::default()
-                .direction(Direction::Horizontal)
-                .constraints([Constraint::Length(SHIP_GUTTER_WIDTH), Constraint::Min(0)])
-                .split(area);
-            chunks[0]
+            let capacity = band_capacity(area.width).min(PLANET_COUNT);
+            let start = band_viewport_start(selected, capacity);
+            let cards_y = area.y.saturating_add(SHIP_GUTTER_HEIGHT);
+            let step = PLANET_CARD_WIDTH + PLANET_GAP;
+            (0..PLANET_COUNT)
+                .map(|i| {
+                    let slot = i as i64 - start as i64;
+                    if capacity == 0 || slot < 0 || slot >= capacity as i64 {
+                        Rect::new(area.x, cards_y, 0, 0)
+                    } else {
+                        Rect::new(
+                            area.x + slot as u16 * step,
+                            cards_y,
+                            PLANET_CARD_WIDTH,
+                            PLANET_CARD_HEIGHT,
+                        )
+                    }
+                })
+                .collect()
         }
-        MapMode::Compact => Rect::new(area.x, area.y, 0, area.height),
+        MapMode::Compact => {
+            let w = area.width / PLANET_COUNT as u16;
+            (0..PLANET_COUNT)
+                .map(|i| Rect::new(area.x + i as u16 * w, area.y, w, 1))
+                .collect()
+        }
     }
 }
 
-/// Hit-tests `pos` against the current planet layout for `area`. Returns
-/// the index of the card containing `pos`, or `None` for the gutter or any
-/// point outside all cards.
-pub fn planet_at(area: Rect, pos: Position) -> Option<usize> {
-    planet_layout(area)
+/// The ship gutter row in [`MapMode::Full`]: the top [`SHIP_GUTTER_HEIGHT`]
+/// rows of `area`, the ship's horizontal flight lane. A zero-height
+/// [`Rect`] in [`MapMode::Compact`].
+pub fn ship_gutter(area: Rect) -> Rect {
+    match map_mode(area) {
+        MapMode::Full => Rect::new(
+            area.x,
+            area.y,
+            area.width,
+            SHIP_GUTTER_HEIGHT.min(area.height),
+        ),
+        MapMode::Compact => Rect::new(area.x, area.y, area.width, 0),
+    }
+}
+
+/// Hit-tests `pos` against the current planet layout for `area` (windowed
+/// around `selected`). Returns the index of the card containing `pos`, or
+/// `None` for the gutter row or any point outside all cards.
+pub fn planet_at(area: Rect, pos: Position, selected: usize) -> Option<usize> {
+    planet_layout(area, selected)
         .iter()
         .position(|card| card.width > 0 && card.height > 0 && card.contains(pos))
 }
 
-fn center_y(rect: Rect) -> f32 {
-    rect.y as f32 + rect.height as f32 / 2.0
+/// Vertical center of the ship sprite for the horizontal band. While
+/// [`ShipPhase::Idle`]/[`ShipPhase::Traveling`] the ship parks at the
+/// gutter's sprite-lane middle row (`core`); the dock is the vertical move
+/// onto the planet: [`ShipPhase::Descending`] lerps core → the target
+/// card's top row (`entry` = `card.y`) by `dock_depth`, and
+/// [`ShipPhase::Ascending`] reverses it. Never panics: an empty or
+/// fully-off-window `cards` slice just leaves the ship parked at `core`.
+pub fn ship_y(
+    gutter: Rect,
+    cards: &[Rect],
+    target: usize,
+    phase: ShipPhase,
+    dock_depth: f32,
+) -> f32 {
+    let core = gutter.y as f32 + gutter.height as f32 / 2.0;
+    let entry = cards
+        .get(target.min(cards.len().saturating_sub(1)))
+        .filter(|card| card.width > 0 && card.height > 0)
+        .map(|card| card.y as f32)
+        .unwrap_or(core);
+    match phase {
+        ShipPhase::Idle | ShipPhase::Traveling => core,
+        ShipPhase::Descending => core + (entry - core) * dock_depth,
+        ShipPhase::Ascending => entry + (core - entry) * dock_depth,
+    }
 }
 
-/// Computes the ship sprite's placement inside `gutter`, interpolating its
-/// vertical center between the cards straddling `pos` (a fractional planet
-/// index) and clamping the result to fit.
-pub fn ship_rect(gutter: Rect, cards: &[Rect], pos: f32, sprite_h: u16) -> Rect {
-    if cards.is_empty() || gutter.width == 0 || gutter.height == 0 {
-        return Rect::new(gutter.x, gutter.y, 0, 0);
-    }
-
-    let max_index = cards.len() - 1;
-    let i = pos.floor().clamp(0.0, max_index as f32) as usize;
-    let t = pos.fract().clamp(0.0, 1.0);
-    let next = (i + 1).min(max_index);
-
-    let y0 = center_y(cards[i]);
-    let y1 = center_y(cards[next]);
-    let lerped_y = y0 + (y1 - y0) * t;
-    let sprite_y = lerped_y - sprite_h as f32 / 2.0;
-
-    let clamped_height = sprite_h.min(gutter.height);
-    let gutter_bottom = gutter.y.saturating_add(gutter.height);
-    let max_top = gutter_bottom.saturating_sub(clamped_height).max(gutter.y);
-
-    let candidate_y = if sprite_y.is_finite() && sprite_y > 0.0 {
-        sprite_y.round() as u16
-    } else {
-        0
+/// Horizontal center of the ship sprite: lerps the visible cards' center
+/// columns by the fractional planet index `pos` (the transpose of the old
+/// vertical `ship_rect`). Positions outside the visible window clamp to
+/// the window's edge cards (off-window cards are zero rects); an empty
+/// `cards` slice falls back to `0.0` so callers stay finite. Never panics.
+pub fn ship_x(cards: &[Rect], pos: f32) -> f32 {
+    let is_visible = |card: &Rect| card.width > 0 && card.height > 0;
+    // The visible window is contiguous, so its first/last members bound
+    // every flight without collecting an index list (no per-frame alloc).
+    let Some(lo) = cards.iter().position(is_visible) else {
+        return 0.0;
     };
-    let final_y = candidate_y.clamp(gutter.y, max_top);
-
-    Rect::new(gutter.x, final_y, gutter.width, clamped_height)
+    let Some(hi) = cards.iter().rposition(is_visible) else {
+        return 0.0;
+    };
+    let center_x = |k: usize| cards[k].x as f32 + cards[k].width as f32 / 2.0;
+    let clamped = pos.clamp(lo as f32, hi as f32);
+    let i = clamped.floor() as usize;
+    let t = clamped.fract();
+    let next = (i + 1).min(hi);
+    let x0 = center_x(i);
+    let x1 = center_x(next);
+    x0 + (x1 - x0) * t
 }
 
 /// Width (in columns) of the planet sprite lane inside each Full-mode card.
-/// The ship parks at the lane edge (`card.x`) when idle and docks toward the
-/// lane core (`card.x + SPRITE_LANE_WIDTH / 2`) when descending.
+/// Anchors the planet sprite's left edge inside the card; the ship docks
+/// down onto this lane from the top gutter row.
 pub const SPRITE_LANE_WIDTH: u16 = 12;
 
 /// Left-hand sprite lane of a Full-mode planet card. `sprite_lane ∪
@@ -163,40 +215,6 @@ pub fn info_column(card: Rect) -> Rect {
         card.width.saturating_sub(w),
         card.height,
     )
-}
-
-/// Horizontal x (ship sprite left edge) of the 2-D voyage. All 7 cards share
-/// the same x, so while [`ShipPhase::Idle`]/[`ShipPhase::Traveling`] the
-/// column is constant at the target's lane entry (`card.x`); the dock is the
-/// real horizontal move onto the planet: [`ShipPhase::Descending`] lerps
-/// lane entry → lane core by `dock_depth`, [`ShipPhase::Ascending`] reverses
-/// it. Never panics: empty cards fall back into the gutter, and an
-/// out-of-range target clamps to the last card.
-pub fn ship_x(
-    gutter: Rect,
-    cards: &[Rect],
-    pos: f32,
-    target: usize,
-    phase: ShipPhase,
-    dock_depth: f32,
-) -> f32 {
-    let Some(card) = cards.get(target.min(cards.len().saturating_sub(1))) else {
-        // Degenerate layout: nothing to park against. Track `pos` across the
-        // gutter so the fallback stays finite and on-screen.
-        let t = if pos.is_finite() {
-            pos.clamp(0.0, (PLANET_COUNT - 1) as f32) / (PLANET_COUNT - 1) as f32
-        } else {
-            0.0
-        };
-        return gutter.x as f32 + t * gutter.width as f32;
-    };
-    let lane_entry = card.x as f32;
-    let lane_core = lane_entry + SPRITE_LANE_WIDTH as f32 / 2.0;
-    match phase {
-        ShipPhase::Idle | ShipPhase::Traveling => lane_entry,
-        ShipPhase::Descending => lane_entry + (lane_core - lane_entry) * dock_depth,
-        ShipPhase::Ascending => lane_core + (lane_entry - lane_core) * dock_depth,
-    }
 }
 
 /// One row of the planet lesson list: either a non-selectable section
@@ -229,20 +247,6 @@ pub fn build_rows(tier_lessons: &[(usize, &Lesson)], sections: &[Section]) -> Ve
     }
 
     rows
-}
-
-/// Computes the first visible display row so `selected_display_idx` stays
-/// inside a window of `capacity` rows. Matches the pre-PR3 `ui.rs` viewport
-/// algorithm. `capacity == 0` always returns `0` (nothing is visible).
-pub fn viewport_start(selected_display_idx: usize, capacity: usize) -> usize {
-    if capacity == 0 {
-        return 0;
-    }
-    if selected_display_idx >= capacity {
-        selected_display_idx + 1 - capacity
-    } else {
-        0
-    }
 }
 
 /// Maps a terminal `row` inside `list_area` (a bordered widget) to the
@@ -341,12 +345,53 @@ mod tests {
         );
     }
 
+    /// Legacy sliding-window algorithm (`viewport_start`, deleted), ported
+    /// verbatim into this test as the equivalence oracle.
+    fn legacy_viewport_start(selected_display_idx: usize, capacity: usize) -> usize {
+        if capacity == 0 {
+            return 0;
+        }
+        if selected_display_idx >= capacity {
+            selected_display_idx + 1 - capacity
+        } else {
+            0
+        }
+    }
+
     #[test]
-    fn test_viewport_start_matches_prior_algorithm() {
-        assert_eq!(viewport_start(0, 5), 0);
-        assert_eq!(viewport_start(7, 5), 3);
-        assert_eq!(viewport_start(4, 5), 0);
-        assert_eq!(viewport_start(9, 0), 0);
+    fn band_viewport_start_matches_legacy_viewport_start_for_all_inputs() {
+        for selected in 0..=9usize {
+            for capacity in 0..=7usize {
+                assert_eq!(
+                    band_viewport_start(selected, capacity),
+                    legacy_viewport_start(selected, capacity),
+                    "selected={selected} capacity={capacity}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn band_viewport_start_camera_follows_selection() {
+        // Selection past the window edge slides the window so the selection
+        // stays visible at its trailing edge.
+        assert_eq!(band_viewport_start(6, 4), 3);
+        assert_eq!(band_viewport_start(5, 4), 2);
+        assert_eq!(band_viewport_start(7, 7), 1);
+    }
+
+    #[test]
+    fn band_viewport_start_in_window_keeps_start() {
+        // Selection already inside the window keeps the window pinned at 0
+        // (or wherever it was): no panning while the selection is visible.
+        assert_eq!(band_viewport_start(0, 4), 0);
+        assert_eq!(band_viewport_start(2, 4), 0);
+        assert_eq!(band_viewport_start(3, 4), 0);
+        assert_eq!(
+            band_viewport_start(4, 4),
+            1,
+            "first index past the window pans by one"
+        );
     }
 
     #[test]
@@ -391,151 +436,308 @@ mod tests {
         assert_eq!(display_index_of(&rows, 99), None);
     }
 
-    fn non_overlapping_top_to_bottom(rects: &[Rect]) {
-        let mut prev_bottom: Option<u16> = None;
-        for rect in rects.iter().filter(|r| r.height > 0 && r.width > 0) {
-            if let Some(prev_bottom) = prev_bottom {
-                assert!(
-                    rect.y >= prev_bottom,
-                    "rects must be ordered top-to-bottom without overlap: {rect:?}"
-                );
-            }
-            prev_bottom = Some(rect.y + rect.height);
+    /// Wide Full-mode area where all 7 planets fit without panning.
+    fn wide_full_area() -> Rect {
+        Rect::new(0, 0, 200, 40)
+    }
+
+    /// Map-body-sized Full-mode area (62% of a 120-col window): capacity 4.
+    fn band_full_area() -> Rect {
+        Rect::new(0, 0, 74, 31)
+    }
+
+    #[test]
+    fn planet_layout_returns_exactly_seven_rects() {
+        for area in [wide_full_area(), band_full_area(), Rect::new(0, 0, 40, 12)] {
+            assert_eq!(planet_layout(area, 0).len(), PLANET_COUNT, "area={area:?}");
         }
     }
 
     #[test]
-    fn test_planet_layout_returns_7_rects_120x40() {
-        let area = Rect::new(0, 0, 120, 40);
-        let rects = planet_layout(area);
-        assert_eq!(rects.len(), PLANET_COUNT);
-        non_overlapping_top_to_bottom(&rects);
+    fn planet_layout_orders_planets_left_to_right() {
+        // All 7 visible (no panning): x must be strictly increasing Tier1→7.
+        let rects = planet_layout(wide_full_area(), 0);
+        for w in rects.windows(2) {
+            assert!(
+                w[1].x > w[0].x,
+                "rects must be ordered left-to-right without overlap: {rects:?}"
+            );
+            assert!(
+                w[1].x >= w[0].x + w[0].width,
+                "neighbor cards must not overlap: {rects:?}"
+            );
+        }
+        // Panned window keeps the same ordering for the visible planets.
+        let panned = planet_layout(band_full_area(), 6);
+        let xs: Vec<u16> = panned.iter().filter(|r| r.width > 0).map(|r| r.x).collect();
+        assert_eq!(xs.len(), 4, "capacity at 74 cols is 4: {panned:?}");
+        for w in xs.windows(2) {
+            assert!(w[1] > w[0], "panned window must stay ordered: {panned:?}");
+        }
     }
 
     #[test]
-    fn test_planet_layout_returns_7_rects_64x30() {
-        let area = Rect::new(0, 0, 64, 30);
-        let rects = planet_layout(area);
-        assert_eq!(rects.len(), PLANET_COUNT);
-        non_overlapping_top_to_bottom(&rects);
+    fn planet_layout_fixed_card_step() {
+        let origin = Rect::new(5, 7, 200, 30);
+        let rects = planet_layout(origin, 0);
+        let step = PLANET_CARD_WIDTH + PLANET_GAP;
+        for (i, rect) in rects.iter().enumerate() {
+            assert_eq!(rect.x, origin.x + i as u16 * step, "card {i}");
+            assert_eq!(
+                rect.y,
+                origin.y + SHIP_GUTTER_HEIGHT,
+                "card {i} sits below the gutter"
+            );
+            assert_eq!(rect.width, PLANET_CARD_WIDTH, "card {i}");
+            assert_eq!(rect.height, PLANET_CARD_HEIGHT, "card {i}");
+        }
     }
 
     #[test]
-    fn test_planet_layout_never_panics_20x8() {
-        let area = Rect::new(0, 0, 20, 8);
-        let rects = planet_layout(area);
-        assert_eq!(rects.len(), PLANET_COUNT);
-        non_overlapping_top_to_bottom(&rects);
+    fn planet_layout_off_window_planets_are_zero_rects() {
+        // 74 cols (a 120-col window's map body) → capacity 4: selecting
+        // planet 6 pans the window to 3..=6, so planets 0..=2 collapse to
+        // zero rects.
+        let area = Rect::new(0, 0, 74, 31);
+        let rects = planet_layout(area, 6);
+        for (i, rect) in rects.iter().enumerate() {
+            let visible = (3..=6).contains(&i);
+            assert_eq!(
+                rect.width > 0 && rect.height > 0,
+                visible,
+                "planet {i} visibility mismatch: {rect:?}"
+            );
+        }
+        assert_eq!(rects[6].x, area.x + 3 * (PLANET_CARD_WIDTH + PLANET_GAP));
     }
 
     #[test]
-    fn test_planet_layout_never_panics_1x1() {
-        let area = Rect::new(0, 0, 1, 1);
-        let rects = planet_layout(area);
-        assert_eq!(rects.len(), PLANET_COUNT);
-        non_overlapping_top_to_bottom(&rects);
+    fn planet_layout_reserves_top_ship_gutter_row() {
+        let area = Rect::new(3, 2, 200, 30);
+        let gutter = ship_gutter(area);
+        assert_eq!(
+            gutter,
+            Rect::new(area.x, area.y, area.width, SHIP_GUTTER_HEIGHT)
+        );
+        for (i, rect) in planet_layout(area, 0).iter().enumerate() {
+            assert!(
+                rect.y >= area.y + SHIP_GUTTER_HEIGHT,
+                "card {i} must start below the ship gutter row: {rect:?}"
+            );
+        }
     }
 
     #[test]
-    fn test_planet_layout_never_panics_zero() {
-        let area = Rect::new(0, 0, 0, 0);
-        let rects = planet_layout(area);
-        assert_eq!(rects.len(), PLANET_COUNT);
-        non_overlapping_top_to_bottom(&rects);
-    }
-
-    #[test]
-    fn test_map_mode_boundary_45x14_and_46x13_vs_46x14() {
-        assert_eq!(map_mode(Rect::new(0, 0, 45, 14)), MapMode::Compact);
-        assert_eq!(map_mode(Rect::new(0, 0, 46, 13)), MapMode::Compact);
-        assert_eq!(map_mode(Rect::new(0, 0, 46, 14)), MapMode::Full);
-    }
-
-    #[test]
-    fn test_planet_at_hits_card_centers() {
-        for area in [Rect::new(0, 0, 120, 40), Rect::new(0, 0, 40, 12)] {
-            let cards = planet_layout(area);
-            for (i, card) in cards.iter().enumerate() {
-                if card.width == 0 || card.height == 0 {
-                    continue;
-                }
-                let center = Position {
-                    x: card.x + card.width / 2,
-                    y: card.y + card.height / 2,
-                };
+    fn planet_layout_compact_mode_seven_horizontal_columns() {
+        let area = Rect::new(0, 0, 40, 12);
+        assert_eq!(map_mode(area), MapMode::Compact);
+        let w = area.width / PLANET_COUNT as u16;
+        for selected in [0usize, 6] {
+            let rects = planet_layout(area, selected);
+            for (i, rect) in rects.iter().enumerate() {
                 assert_eq!(
-                    planet_at(area, center),
-                    Some(i),
-                    "area={area:?} card {i}={card:?} center={center:?}"
+                    rect.x,
+                    area.x + i as u16 * w,
+                    "column {i} (selected={selected})"
                 );
+                assert_eq!(rect.y, area.y, "compact columns share the single row");
+                assert_eq!(rect.width, w, "7 equal columns (selected={selected})");
+                assert_eq!(rect.height, 1, "compact columns are one row tall");
             }
         }
+    }
+
+    #[test]
+    fn planet_layout_zero_capacity_returns_all_zero_rects() {
+        // Compact area narrower than 7 columns: every column width floors to
+        // zero, so no planet can render and nothing reports a fake hit rect.
+        let area = Rect::new(0, 0, 5, 12);
+        assert_eq!(map_mode(area), MapMode::Compact);
+        let rects = planet_layout(area, 0);
+        assert_eq!(rects.len(), PLANET_COUNT);
+        for (i, rect) in rects.iter().enumerate() {
+            assert_eq!(
+                rect.width * rect.height,
+                0,
+                "rect {i} must be zero: {rect:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn planet_layout_degenerate_areas_never_panic() {
+        for area in [
+            Rect::new(0, 0, 0, 0),
+            Rect::new(0, 0, 1, 1),
+            Rect::new(0, 0, 2, 1),
+            Rect::new(0, 0, 1, 2),
+            Rect::new(4, 3, 6, 2),
+        ] {
+            let rects = planet_layout(area, 3);
+            assert_eq!(rects.len(), PLANET_COUNT, "area={area:?}");
+        }
+    }
+
+    #[test]
+    fn test_map_mode_boundary() {
+        // Full mode needs both the minimum width and the derived minimum
+        // height (ship gutter row + one card row block).
+        assert_eq!(
+            map_mode(Rect::new(0, 0, MIN_FULL_WIDTH - 1, MIN_FULL_HEIGHT)),
+            MapMode::Compact
+        );
+        assert_eq!(
+            map_mode(Rect::new(0, 0, MIN_FULL_WIDTH, MIN_FULL_HEIGHT - 1)),
+            MapMode::Compact
+        );
+        assert_eq!(
+            map_mode(Rect::new(0, 0, MIN_FULL_WIDTH, MIN_FULL_HEIGHT)),
+            MapMode::Full
+        );
+    }
+
+    #[test]
+    fn planet_at_hits_only_visible_planets() {
+        let area = Rect::new(0, 0, 120, 40);
+        let cards = planet_layout(area, 0);
+        for (i, card) in cards.iter().enumerate() {
+            if card.width == 0 || card.height == 0 {
+                continue;
+            }
+            let center = Position {
+                x: card.x + card.width / 2,
+                y: card.y + card.height / 2,
+            };
+            assert_eq!(
+                planet_at(area, center, 0),
+                Some(i),
+                "area={area:?} card {i}={card:?} center={center:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn planet_at_requires_selected_for_window() {
+        // The same physical point resolves to planet 2 when the window starts
+        // at 0 (selected=0), but to planet 5 when selected=6 pans the window
+        // to 3..=6 and planet 5 takes over that slot: hit-testing must follow
+        // the selected-driven window.
+        let area = Rect::new(0, 0, 74, 31);
+        let card2 = planet_layout(area, 0)[2];
+        let point = Position {
+            x: card2.x + card2.width / 2,
+            y: card2.y + card2.height / 2,
+        };
+        assert_eq!(planet_at(area, point, 0), Some(2));
+        assert_eq!(
+            planet_at(area, point, 6),
+            Some(5),
+            "card 5 slides into card 2's old slot under selected=6"
+        );
     }
 
     #[test]
     fn test_planet_at_outside_returns_none() {
         let area = Rect::new(0, 0, 120, 40);
-        let gutter_point = Position { x: 1, y: 1 };
-        assert_eq!(planet_at(area, gutter_point), None);
-
-        let below_all_cards = Position { x: 60, y: 39 };
-        assert_eq!(planet_at(area, below_all_cards), None);
-    }
-
-    #[test]
-    fn test_ship_gutter_zero_width_in_compact() {
-        let area = Rect::new(0, 0, 40, 12);
-        assert_eq!(map_mode(area), MapMode::Compact);
-        assert_eq!(ship_gutter(area).width, 0);
-    }
-
-    #[test]
-    fn test_ship_rect_stays_inside_gutter() {
-        let area = Rect::new(0, 0, 120, 40);
-        let gutter = ship_gutter(area);
-        let cards = planet_layout(area);
-        let sprite_h = 3u16;
-
-        for pos in [0.0f32, 0.5, 3.5, 6.0] {
-            let rect = ship_rect(gutter, &cards, pos, sprite_h);
-            assert!(
-                rect.y >= gutter.y,
-                "pos={pos} rect={rect:?} gutter={gutter:?}"
-            );
-            assert!(
-                rect.y + rect.height <= gutter.y + gutter.height,
-                "pos={pos} rect={rect:?} gutter={gutter:?}"
-            );
-        }
-
-        let empty_cards: Vec<Rect> = Vec::new();
-        let rect = ship_rect(gutter, &empty_cards, 0.0, sprite_h);
-        assert_eq!(rect.width * rect.height, 0);
-    }
-
-    #[test]
-    fn test_ship_rect_matches_card_centres() {
-        let area = Rect::new(0, 0, 120, 40);
-        let gutter = ship_gutter(area);
-        let cards = planet_layout(area);
-        let sprite_h = 3u16;
-        let in_gutter = |r: Rect| r.y >= gutter.y && r.y + r.height <= gutter.y + gutter.height;
-
-        for (pos, card_idx) in [(0.0f32, 0), (6.0, 6)] {
-            let rect = ship_rect(gutter, &cards, pos, sprite_h);
-            let card_center = center_y(cards[card_idx]) as u16;
-            assert_eq!(rect.y + rect.height / 2, card_center, "pos {pos}");
-            assert!(in_gutter(rect), "rect={rect:?} gutter={gutter:?}");
-        }
-
-        let rect_half = ship_rect(gutter, &cards, 0.5, sprite_h);
-        let mid = (center_y(cards[0]) + center_y(cards[1])) / 2.0;
-        let half_center = rect_half.y as f32 + rect_half.height as f32 / 2.0;
-        assert!(
-            (half_center - mid).abs() <= 1.0,
-            "pos 0.5 within 1 cell of the card 0/1 midpoint"
+        let gutter_point = Position { x: 60, y: 1 };
+        assert_eq!(
+            planet_at(area, gutter_point, 0),
+            None,
+            "ship gutter row is not a card"
         );
-        assert!(in_gutter(rect_half), "rect={rect_half:?} gutter={gutter:?}");
+        let below_all_cards = Position { x: 60, y: 39 };
+        assert_eq!(
+            planet_at(area, below_all_cards, 0),
+            None,
+            "below the card band"
+        );
+    }
+
+    #[test]
+    fn ship_gutter_is_top_row_in_full_and_zero_in_compact() {
+        let full = Rect::new(0, 0, 120, 40);
+        assert_eq!(map_mode(full), MapMode::Full);
+        assert_eq!(
+            ship_gutter(full),
+            Rect::new(full.x, full.y, full.width, SHIP_GUTTER_HEIGHT),
+            "Full mode reserves the top rows for the ship lane"
+        );
+        let compact = Rect::new(0, 0, 40, 12);
+        assert_eq!(map_mode(compact), MapMode::Compact);
+        assert_eq!(ship_gutter(compact).height, 0, "Compact has no gutter row");
+    }
+
+    #[test]
+    fn ship_y_parks_at_sprite_lane_core_when_idle() {
+        let area = Rect::new(0, 0, 120, 40);
+        let gutter = ship_gutter(area);
+        let cards = planet_layout(area, 3);
+        let core = gutter.y as f32 + gutter.height as f32 / 2.0;
+        for phase in [ShipPhase::Idle, ShipPhase::Traveling] {
+            let y = ship_y(gutter, &cards, 3, phase, 0.0);
+            assert!(
+                (y - core).abs() < 1e-4,
+                "phase {phase:?} must park at the sprite-lane middle row ({core}), got {y}"
+            );
+        }
+    }
+
+    #[test]
+    fn ship_y_interpolates_lane_entry_to_core() {
+        let area = Rect::new(0, 0, 120, 40);
+        let gutter = ship_gutter(area);
+        let cards = planet_layout(area, 3);
+        let core = gutter.y as f32 + gutter.height as f32 / 2.0;
+        let entry = cards[3].y as f32;
+        assert!(entry > core, "docked entry sits below the flight lane");
+
+        // Descending: flight lane → card top as dock_depth goes 0→1.
+        assert!((ship_y(gutter, &cards, 3, ShipPhase::Descending, 0.0) - core).abs() < 1e-4);
+        let mid = ship_y(gutter, &cards, 3, ShipPhase::Descending, 0.5);
+        assert!((mid - (core + (entry - core) * 0.5)).abs() < 1e-4);
+        assert!((ship_y(gutter, &cards, 3, ShipPhase::Descending, 1.0) - entry).abs() < 1e-4);
+
+        // Ascending reverses it: card top → flight lane as dock_depth goes 0→1.
+        assert!((ship_y(gutter, &cards, 3, ShipPhase::Ascending, 0.0) - entry).abs() < 1e-4);
+        assert!((ship_y(gutter, &cards, 3, ShipPhase::Ascending, 1.0) - core).abs() < 1e-4);
+    }
+
+    #[test]
+    fn ship_x_lerps_card_center_x_by_position() {
+        let area = Rect::new(0, 0, 120, 40);
+        let cards = planet_layout(area, 0);
+        let center_x = |k: usize| cards[k].x as f32 + cards[k].width as f32 / 2.0;
+
+        // Integer positions park exactly on that card's center column.
+        for k in [0usize, 3, 6] {
+            assert!(
+                (ship_x(&cards, k as f32) - center_x(k)).abs() < 1e-4,
+                "park at card {k}"
+            );
+        }
+
+        // Fractional positions interpolate between the straddled centers.
+        let half = ship_x(&cards, 0.5);
+        assert!((half - (center_x(0) + center_x(1)) / 2.0).abs() < 1e-4);
+        let quarter = ship_x(&cards, 3.25);
+        assert!(
+            (quarter - (center_x(3) + (center_x(4) - center_x(3)) * 0.25)).abs() < 1e-4,
+            "pos 3.25 lerps cards 3→4"
+        );
+
+        // Out-of-window cards are zero rects: the flight clamps into the
+        // visible window instead of lerping toward a fake center at 0.
+        let panned = planet_layout(band_full_area(), 6);
+        let x = ship_x(&panned, 2.5);
+        let window_start_x = panned[3].x as f32 + panned[3].width as f32 / 2.0;
+        assert!(
+            (x - window_start_x).abs() < 1e-4,
+            "pos 2.5 clamps to the first visible card center, got {x}"
+        );
+
+        // Degenerate: no visible cards → finite fallback, never a panic.
+        let empty: Vec<Rect> = Vec::new();
+        assert!(ship_x(&empty, 2.5).is_finite());
     }
 
     #[test]
@@ -562,51 +764,5 @@ mod tests {
         assert_eq!(sprite_lane(narrow), Rect::new(3, 1, 7, 3));
         assert_eq!(info_column(narrow), Rect::new(10, 1, 0, 3));
         assert_eq!(sprite_lane(narrow).x + sprite_lane(narrow).width, info_column(narrow).x);
-    }
-
-    #[test]
-    fn test_ship_x_voyage_by_phase() {
-        let area = Rect::new(0, 0, 120, 40);
-        let gutter = ship_gutter(area);
-        let cards = planet_layout(area);
-        let entry = cards[2].x as f32;
-        let core = entry + SPRITE_LANE_WIDTH as f32 / 2.0;
-        let x = |pos, target, phase, depth| ship_x(gutter, &cards, pos, target, phase, depth);
-
-        // Idle and Traveling park at the target's lane entry (= card.x), no
-        // matter how far into the flight `pos` is.
-        for phase in [ShipPhase::Idle, ShipPhase::Traveling] {
-            for pos in [0.0, 2.5, 5.9] {
-                assert_eq!(x(pos, 2, phase, 0.0), entry, "phase {phase:?} pos {pos}");
-            }
-        }
-
-        // Descending lerps lane entry → lane core (~+6 cells) by dock_depth.
-        assert_eq!(x(2.0, 2, ShipPhase::Descending, 0.0), entry);
-        assert!((x(2.0, 2, ShipPhase::Descending, 0.5) - (entry + (core - entry) * 0.5)).abs() < 1e-4);
-        assert!((x(2.0, 2, ShipPhase::Descending, 1.0) - core).abs() < 1e-4, "docked ≈ +6 cells");
-
-        // Ascending lerps lane core → lane entry by dock_depth.
-        assert!((x(2.0, 2, ShipPhase::Ascending, 0.0) - core).abs() < 1e-4);
-        assert_eq!(x(2.0, 2, ShipPhase::Ascending, 1.0), entry);
-
-        // Retarget continuity: the x stays pinned to the retargeted target's
-        // lane entry mid-flight (shared card x → no column jump possible).
-        assert_eq!(x(2.3, 5, ShipPhase::Traveling, 0.0), cards[5].x as f32);
-
-        // Out-of-range target falls back to the last card — no panic.
-        assert_eq!(x(6.0, 99, ShipPhase::Idle, 0.0), cards[6].x as f32);
-    }
-
-    #[test]
-    fn test_ship_x_degenerate_no_panic() {
-        let area = Rect::new(0, 0, 120, 40);
-        let gutter = ship_gutter(area);
-        let empty: Vec<Rect> = Vec::new();
-        for phase in [ShipPhase::Idle, ShipPhase::Traveling, ShipPhase::Descending, ShipPhase::Ascending] {
-            let v = ship_x(gutter, &empty, 0.0, 0, phase, 0.5);
-            assert!(v.is_finite(), "phase {phase:?} must return a finite x");
-            assert!(v >= gutter.x as f32, "phase {phase:?} degenerate fallback stays at/right of the gutter");
-        }
     }
 }
