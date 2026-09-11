@@ -16,6 +16,12 @@ pub const DESCEND: Duration = Duration::from_millis(260);
 pub const ASCEND: Duration = Duration::from_millis(200);
 /// Thruster flicker half-period; see [`ShipAnimation::frame_index`].
 pub const FLICKER: Duration = Duration::from_millis(120);
+/// Number of drawn frames per planet sprite; see
+/// [`crate::tui::ascii::AsciiArt::PLANET_SPRITES`].
+pub const PLANET_FRAME_COUNT: usize = 2;
+/// Cycling period of planet sprite frames while the ship is parked
+/// (ambient variation cadence, not tied to any [`ShipPhase`]).
+pub const PLANET_IDLE_PERIOD: Duration = Duration::from_millis(800);
 
 /// Discrete state of the ship's animation state machine.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -157,6 +163,13 @@ impl ShipAnimation {
         ((self.total_elapsed.as_millis() / FLICKER.as_millis()) % 2) as usize
     }
 
+    /// Monotonic time accumulated across every [`ShipAnimation::advance`],
+    /// including while idle; drives ambient planet frames via
+    /// [`planet_frame_index`].
+    pub fn total_elapsed(&self) -> Duration {
+        self.total_elapsed
+    }
+
     /// Unitless dock depth the renderer maps onto the sprite lane: `0.0`
     /// means cruising at the lane edge, `1.0` means docked into the lane
     /// core. `progress()` while descending, `1.0 - progress()` ascending,
@@ -173,6 +186,17 @@ impl ShipAnimation {
 /// Per-planet travel duration, clamped to `[TRAVEL_MIN, TRAVEL_MAX]`.
 fn hop_duration(distance: f32) -> Duration {
     HOP.mul_f32(distance.max(0.0)).clamp(TRAVEL_MIN, TRAVEL_MAX)
+}
+
+/// Index of the planet sprite frame to draw after `total_elapsed` of
+/// mission time, cycling through `frame_count` frames once per `period`.
+/// Defensive by contract: a zero (or sub-millisecond) `period` or a zero
+/// `frame_count` always yields frame `0` instead of dividing by zero.
+pub fn planet_frame_index(total_elapsed: Duration, period: Duration, frame_count: usize) -> usize {
+    if frame_count == 0 || period.as_millis() == 0 {
+        return 0;
+    }
+    ((total_elapsed.as_millis() / period.as_millis()) % frame_count as u128) as usize
 }
 
 #[cfg(test)]
@@ -306,6 +330,59 @@ mod tests {
         assert!(!anim.is_idle());
         anim.advance(Duration::from_millis(1));
         assert!(anim.is_idle());
+    }
+
+    #[test]
+    fn planet_frame_index_zero_period_returns_zero() {
+        // A zero period must never divide by zero: always frame 0.
+        assert_eq!(
+            planet_frame_index(Duration::from_millis(999), Duration::ZERO, 2),
+            0
+        );
+        assert_eq!(
+            planet_frame_index(Duration::from_secs(5), Duration::ZERO, 7),
+            0
+        );
+    }
+
+    #[test]
+    fn planet_frame_index_zero_frame_count_returns_zero() {
+        // A zero frame count has no frames to cycle: always frame 0.
+        assert_eq!(
+            planet_frame_index(Duration::from_millis(1600), PLANET_IDLE_PERIOD, 0),
+            0
+        );
+        assert_eq!(planet_frame_index(Duration::ZERO, PLANET_IDLE_PERIOD, 0), 0);
+    }
+
+    #[test]
+    fn planet_frame_index_cycles_by_period() {
+        let period = Duration::from_millis(100);
+        assert_eq!(planet_frame_index(Duration::ZERO, period, 2), 0, "t=0");
+        assert_eq!(
+            planet_frame_index(period - Duration::from_millis(1), period, 2),
+            0,
+            "t=period-1ms"
+        );
+        assert_eq!(planet_frame_index(period, period, 2), 1, "t=period");
+        assert_eq!(planet_frame_index(2 * period, period, 2), 0, "t=2·period");
+    }
+
+    #[test]
+    fn total_elapsed_starts_zero_and_accumulates_advance() {
+        let mut anim = ShipAnimation::new(3);
+        assert_eq!(anim.total_elapsed(), Duration::ZERO);
+
+        for _ in 0..3 {
+            anim.advance(Duration::from_millis(100));
+        }
+        assert_eq!(anim.total_elapsed(), Duration::from_millis(300));
+
+        // Keeps accumulating while Idle: ambient frames need a monotonic
+        // clock even with no transition in flight.
+        assert!(anim.is_idle());
+        anim.advance(Duration::from_millis(50));
+        assert_eq!(anim.total_elapsed(), Duration::from_millis(350));
     }
 
     #[test]
