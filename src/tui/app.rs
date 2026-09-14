@@ -5,7 +5,7 @@ use crate::core::engine::TypingEngine;
 use crate::core::metrics::MetricsCalculator;
 use crate::core::model::{Lesson, SessionKind, SessionMetrics, SessionSummary, Tier, UserProgress};
 use crate::storage::ProgressRepository;
-use crate::tui::animation::ShipAnimation;
+use crate::tui::animation::{ShipAnimation, ShipPhase};
 use crate::tui::planet_layout::{build_rows, MenuRow};
 use std::time::{Duration, Instant};
 
@@ -23,11 +23,13 @@ pub enum CurrentView {
 
 pub struct App {
     pub current_view: CurrentView,
-    /// Deferred view switch: set while the ship is docking into a planet
-    /// lane, committed by [`App::commit_pending_view`] once the ship is
-    /// idle (or by a keypress that completes the animation first). Keeps
-    /// the docking ship visible on the galaxy map until the dock finishes.
-    pub pending_view: Option<CurrentView>,
+    /// D1 docked representation: `true` once a descend has landed on the
+    /// selected planet (maintained by the private settle helper), `false`
+    /// everywhere else. NOT derivable from `ship.is_idle()` — idle-at-target
+    /// is also the startup and post-travel state. While docked the galaxy
+    /// map keeps rendering and `confirm_planet` opens the lessons instead
+    /// of starting another descend.
+    pub docked: bool,
     pub repository: ProgressRepository,
     pub user_progress: UserProgress,
     pub selected_lesson_index: usize,
@@ -62,7 +64,7 @@ impl App {
 
         Self {
             current_view: CurrentView::MainMenu,
-            pending_view: None,
+            docked: false,
             repository,
             user_progress,
             selected_lesson_index: 0,
@@ -91,34 +93,48 @@ impl App {
 
     /// Advances the ship animation by `dt`. Pure with respect to wall-clock
     /// time — tests drive this directly instead of sleeping or calling
-    /// `Instant::now()`. A completed dock commits the deferred view switch
-    /// at the end of the advance, so the view flips exactly when the ship
-    /// lands (Idle), never a frame early.
+    /// `Instant::now()`. A descend that settles during the advance docks
+    /// the ship (`docked = true`) without ever flipping the view (D2:
+    /// auto-flip is gone; the map keeps rendering the docked ship).
     pub fn advance_animation(&mut self, dt: Duration) {
+        let was_descending = self.ship.phase() == ShipPhase::Descending;
         self.ship.advance(dt);
-        self.commit_pending_view();
+        self.settle_dock(was_descending);
     }
 
-    /// Commits the deferred view switch once the ship is idle: if a view is
-    /// pending and the dock finished, the current view flips and the pending
-    /// slot clears. No-op otherwise, so a mid-flight or interrupted dock
-    /// never flips early. Keypresses also call this right after completing
-    /// the animation, so a key can never be swallowed by the dock window.
-    pub fn commit_pending_view(&mut self) {
-        // Short-circuit keeps `take()` from running while the ship is
-        // mid-flight: only a landed dock can commit a pending switch.
-        if self.ship.is_idle() && let Some(view) = self.pending_view.take() {
-            self.current_view = view;
+    /// Instantly finishes any in-flight ship animation (travel, descend, or
+    /// ascend), docking when the finished transition was a descend. Both
+    /// event handlers call this before acting on a key or mouse event, so
+    /// an input never has to wait for the animation — and a key pressed
+    /// mid-descent lands docked, letting the same key dispatch open the
+    /// lessons in one press (never swallowed by the dock window).
+    pub fn finish_ship_animation(&mut self) {
+        let was_descending = self.ship.phase() == ShipPhase::Descending;
+        if !self.ship.is_idle() {
+            self.ship.complete();
+        }
+        self.settle_dock(was_descending);
+    }
+
+    /// D3 landing detection: a transition that WAS descending and is now
+    /// idle has landed — set `docked`. Called from exactly two places
+    /// ([`Self::advance_animation`] and [`Self::finish_ship_animation`]);
+    /// capturing `was_descending` before the mutation is what makes the
+    /// distinction between "just landed" and "was already parked".
+    fn settle_dock(&mut self, was_descending: bool) {
+        if was_descending && self.ship.is_idle() {
+            self.docked = true;
         }
     }
 
-    /// Event-poll interval: fast (16ms, ~60fps) while the ship animates,
-    /// slow (50ms) while idle to avoid burning CPU.
+    /// Event-poll interval: fast (16ms, ~60fps) while the ship animates or
+    /// while the galaxy map is on screen (it always animates — ambient
+    /// planet frames), slow (50ms) elsewhere to avoid burning CPU.
     pub fn poll_interval(&self) -> Duration {
-        if self.ship.is_idle() {
-            Duration::from_millis(50)
-        } else {
+        if !self.ship.is_idle() || self.current_view == CurrentView::MainMenu {
             Duration::from_millis(16)
+        } else {
+            Duration::from_millis(50)
         }
     }
 
@@ -298,10 +314,10 @@ impl App {
     ///
     /// AWARENESS: this couples selection semantics to `current_view`, which
     /// is a latent blast-radius amplifier for any future test that enters
-    /// `PlanetLessons` by calling [`Self::enter_planet_lessons`] and then
-    /// navigates without committing the deferred view switch — the view is
-    /// still `MainMenu`, so clamping silently falls back to the full range.
-    /// Migrations accompany every `enter_planet_lessons` call that asserts
+    /// `PlanetLessons` by calling [`Self::open_planet_lessons`] and then
+    /// navigates before the flip — the view decides between the clamped
+    /// tier range and the full curriculum range.
+    /// Migrations accompany every `open_planet_lessons` call that asserts
     /// tier-clamped selection.
     fn selection_bounds(&self) -> (usize, usize) {
         let lessons = self.available_lessons();
@@ -325,13 +341,31 @@ impl App {
         }
     }
 
+    /// Two-step Enter, step one OR step two depending on the dock state
+    /// (D2): not docked → start the descend toward the selected card;
+    /// docked → open the lesson list directly. The view only ever flips
+    /// through this confirm, never as an animation side effect.
+    pub fn confirm_planet(&mut self) {
+        if self.is_docked() {
+            self.open_planet_lessons();
+        } else {
+            self.ship.descend();
+        }
+    }
+
+    /// `true` while the ship is visibly docked into the selected planet's
+    /// sprite lane (D1). See the `docked` field doc for the full contract.
+    pub fn is_docked(&self) -> bool {
+        self.docked
+    }
+
     /// Enters [`CurrentView::PlanetLessons`] for [`Self::selected_tier`],
     /// resuming on the first lesson of that tier without a passed
     /// [`crate::core::model::BestScore`], or the tier's first lesson if all
-    /// are passed. The switch is deferred: the galaxy map keeps rendering
-    /// the descending ship until the dock completes (or a keypress commits
-    /// the pending view), then `current_view` flips.
-    pub fn enter_planet_lessons(&mut self) {
+    /// are passed. The flip is direct (no deferral): this only runs once
+    /// the ship is docked, and it ends the dock state — the galaxy map is
+    /// left, so the next arrival starts a fresh descend.
+    fn open_planet_lessons(&mut self) {
         let tier = self.selected_tier();
         let lessons = self.available_lessons();
         let tier_lessons: Vec<(usize, &Lesson)> = lessons
@@ -355,14 +389,17 @@ impl App {
         if let Some(&(flat_idx, _)) = target {
             self.selected_lesson_index = flat_idx;
         }
-        self.pending_view = Some(CurrentView::PlanetLessons);
-        self.ship.descend();
+        self.current_view = CurrentView::PlanetLessons;
+        self.docked = false;
     }
 
     /// Leaves [`CurrentView::PlanetLessons`] back to the galaxy map,
-    /// preserving [`Self::selected_planet_index`].
+    /// preserving [`Self::selected_planet_index`]. The ascend it starts
+    /// forbids `docked` (invariant `docked => ship.is_idle()`), so the
+    /// dock lifts here unconditionally.
     pub fn leave_planet_lessons(&mut self) {
         self.current_view = CurrentView::MainMenu;
+        self.docked = false;
         self.ship.ascend();
     }
 
@@ -393,6 +430,9 @@ impl App {
                 self.current_view = CurrentView::MainMenu;
             }
         }
+        // D4: every snap_to path lifts the dock — the teleport re-parks the
+        // ship at a planet without a landed descend behind it.
+        self.docked = false;
         self.ship.snap_to(self.selected_planet_index);
     }
 
@@ -403,6 +443,8 @@ impl App {
             self.selected_planet_index = lesson.tier.index();
         }
         self.current_view = CurrentView::MainMenu;
+        // D4: snap_to path — the dock cannot survive the teleport.
+        self.docked = false;
         self.ship.snap_to(self.selected_planet_index);
     }
 
@@ -437,9 +479,11 @@ impl App {
 
     /// Starts a ship flight toward [`Self::selected_planet_index`] only when
     /// planet navigation actually moved it, avoiding a no-op `Traveling`
-    /// transition on saturated up/home/end at the edges.
+    /// transition on saturated up/home/end at the edges. An actual travel
+    /// lifts the dock (D4): the ship leaves the lane core for the gutter.
     fn travel_ship_if_changed(&mut self, before: usize) {
         if self.selected_planet_index != before {
+            self.docked = false;
             self.ship.travel_to(self.selected_planet_index);
         }
     }
@@ -570,14 +614,12 @@ mod tests {
     use crate::core::model::{BestScore, PlanetStatus, Tier};
 
     #[test]
-    fn test_enter_planet_lessons_matches_selected_tier() {
+    fn test_open_planet_lessons_matches_selected_tier() {
         let mut app = App::new();
         app.user_progress = UserProgress::default();
         app.selected_planet_index = Tier::Tier2FullAlphabet.index();
 
-        app.enter_planet_lessons();
-        // Deferred view switch: complete the dock so the pending view commits.
-        app.advance_animation(crate::tui::animation::DESCEND + std::time::Duration::from_millis(1));
+        app.open_planet_lessons();
 
         assert_eq!(app.current_view, CurrentView::PlanetLessons);
         let selected = app.selected_lesson().expect("a lesson must be selected");
@@ -613,7 +655,7 @@ mod tests {
             .completed_lessons
             .insert(tier1_lessons[1].id.clone(), passed_score);
 
-        app.enter_planet_lessons();
+        app.open_planet_lessons();
 
         let selected = app.selected_lesson().expect("a lesson must be selected");
         assert_eq!(selected.id, tier1_lessons[2].id);
@@ -630,7 +672,7 @@ mod tests {
             );
         }
 
-        app.enter_planet_lessons();
+        app.open_planet_lessons();
 
         let selected = app.selected_lesson().expect("a lesson must be selected");
         assert_eq!(selected.id, tier1_lessons[0].id);
@@ -665,9 +707,7 @@ mod tests {
         }
 
         app.selected_planet_index = Tier::Tier7GrandMaster.index();
-        app.enter_planet_lessons();
-        // Deferred view switch: complete the dock so the pending view commits.
-        app.advance_animation(crate::tui::animation::DESCEND + std::time::Duration::from_millis(1));
+        app.open_planet_lessons();
 
         assert_eq!(app.current_view, CurrentView::PlanetLessons);
         let selected = app
@@ -681,11 +721,10 @@ mod tests {
         let mut app = App::new();
         app.user_progress = UserProgress::default();
         app.selected_planet_index = Tier::Tier1Foundation.index();
-        app.enter_planet_lessons();
-        // Deferred view switch: complete the dock so selection_bounds clamps
-        // to the tier (it returns the full curriculum while view is still
+        // Open flips the view directly, so selection_bounds clamps to the
+        // tier (it returns the full curriculum while the view is still
         // MainMenu).
-        app.advance_animation(crate::tui::animation::DESCEND + std::time::Duration::from_millis(1));
+        app.open_planet_lessons();
 
         let tier1_lessons: Vec<_> = app
             .available_lessons()
@@ -729,10 +768,7 @@ mod tests {
         let mut app = App::new();
         app.user_progress = UserProgress::default();
         app.selected_planet_index = Tier::Tier4NumbersAndSymbols.index();
-        app.enter_planet_lessons();
-        // Deferred view switch: complete the dock before leaving, mirroring
-        // how a docked ship rises on ESC.
-        app.advance_animation(crate::tui::animation::DESCEND + std::time::Duration::from_millis(1));
+        app.open_planet_lessons();
         assert_eq!(app.current_view, CurrentView::PlanetLessons);
 
         app.leave_planet_lessons();
@@ -880,14 +916,39 @@ mod tests {
     }
 
     #[test]
-    fn test_poll_interval_50ms_idle_16ms_animating() {
+    fn poll_interval_mainmenu_is_16ms() {
         let mut app = App::new();
+        app.user_progress = UserProgress::default();
+        app.ship = crate::tui::animation::ShipAnimation::new(app.selected_planet_index);
+
+        // The galaxy map always animates (ambient planet frames, docked or
+        // parked), so MainMenu polls at the fast cadence even while idle.
+        assert!(app.ship.is_idle());
+        assert_eq!(app.current_view, CurrentView::MainMenu);
+        assert_eq!(app.poll_interval(), Duration::from_millis(16));
+    }
+
+    #[test]
+    fn poll_interval_animating_vs_idle_matrix() {
+        let mut app = App::new();
+        app.user_progress = UserProgress::default();
+        app.selected_planet_index = 0;
         app.ship = crate::tui::animation::ShipAnimation::new(0);
 
-        assert_eq!(app.poll_interval(), std::time::Duration::from_millis(50));
-
+        // Animating (any view): fast cadence so the flight renders smoothly.
         app.ship.travel_to(3);
-        assert_eq!(app.poll_interval(), std::time::Duration::from_millis(16));
+        assert_eq!(app.poll_interval(), Duration::from_millis(16));
+
+        // Idle again, still on MainMenu: stays fast (MainMenu never slows).
+        app.ship.complete();
+        assert_eq!(app.poll_interval(), Duration::from_millis(16));
+
+        // Idle outside MainMenu: nothing animates, so the slow cadence is
+        // enough and the CPU is spared.
+        app.current_view = CurrentView::Practice;
+        assert_eq!(app.poll_interval(), Duration::from_millis(50));
+        app.current_view = CurrentView::PlanetLessons;
+        assert_eq!(app.poll_interval(), Duration::from_millis(50));
     }
 
     #[test]
@@ -904,15 +965,20 @@ mod tests {
     }
 
     #[test]
-    fn test_enter_triggers_descend() {
+    fn test_confirm_planet_triggers_descend_when_not_docked() {
         let mut app = App::new();
         app.user_progress = UserProgress::default();
         app.selected_planet_index = Tier::Tier1Foundation.index();
         app.ship = crate::tui::animation::ShipAnimation::new(app.selected_planet_index);
 
-        app.enter_planet_lessons();
+        app.confirm_planet();
 
-        assert_eq!(app.ship.phase(), crate::tui::animation::ShipPhase::Descending);
+        assert_eq!(
+            app.ship.phase(),
+            crate::tui::animation::ShipPhase::Descending
+        );
+        assert_eq!(app.current_view, CurrentView::MainMenu);
+        assert!(!app.is_docked(), "descend alone must not dock");
     }
 
     #[test]
@@ -920,12 +986,227 @@ mod tests {
         let mut app = App::new();
         app.user_progress = UserProgress::default();
         app.selected_planet_index = Tier::Tier1Foundation.index();
-        app.enter_planet_lessons();
-        app.ship.complete();
+        app.ship = crate::tui::animation::ShipAnimation::new(app.selected_planet_index);
+
+        // Two-step Enter: dock first, then the second confirm opens.
+        app.confirm_planet();
+        app.finish_ship_animation();
+        assert!(app.is_docked());
+        app.confirm_planet();
+        assert_eq!(app.current_view, CurrentView::PlanetLessons);
 
         app.leave_planet_lessons();
 
-        assert_eq!(app.ship.phase(), crate::tui::animation::ShipPhase::Ascending);
+        assert_eq!(
+            app.ship.phase(),
+            crate::tui::animation::ShipPhase::Ascending
+        );
+        assert!(!app.is_docked());
+    }
+
+    /// Docks the ship at the currently selected planet through the real
+    /// two-step flow (confirm → settle), leaving the view on MainMenu.
+    fn docked_app() -> App {
+        let mut app = App::new();
+        app.user_progress = UserProgress::default();
+        app.ship = crate::tui::animation::ShipAnimation::new(app.selected_planet_index);
+        app.confirm_planet();
+        app.finish_ship_animation();
+        assert!(app.is_docked());
+        app
+    }
+
+    #[test]
+    fn docked_starts_false() {
+        let mut app = App::new();
+        app.user_progress = UserProgress::default();
+        // D1: "idle at the selected planet" is true at startup, so docked
+        // is memory of a landed descend, never a derivable state.
+        assert!(app.ship.is_idle());
+        assert!(!app.is_docked());
+    }
+
+    #[test]
+    fn docked_set_when_descending_settles_via_advance() {
+        let mut app = App::new();
+        app.user_progress = UserProgress::default();
+        app.selected_planet_index = Tier::Tier2FullAlphabet.index();
+        app.ship = crate::tui::animation::ShipAnimation::new(app.selected_planet_index);
+
+        app.confirm_planet();
+        assert_eq!(
+            app.ship.phase(),
+            crate::tui::animation::ShipPhase::Descending
+        );
+        assert!(!app.is_docked());
+
+        app.advance_animation(crate::tui::animation::DESCEND + Duration::from_millis(1));
+
+        assert!(app.ship.is_idle());
+        assert!(app.is_docked(), "a landed descend must set docked");
+    }
+
+    #[test]
+    fn docked_set_via_finish_ship_animation_without_time() {
+        let mut app = App::new();
+        app.user_progress = UserProgress::default();
+        app.selected_planet_index = Tier::Tier1Foundation.index();
+        app.ship = crate::tui::animation::ShipAnimation::new(app.selected_planet_index);
+
+        app.confirm_planet();
+        app.finish_ship_animation();
+
+        assert!(app.is_docked());
+        assert!(app.ship.is_idle());
+        assert_eq!(
+            app.ship.total_elapsed(),
+            Duration::ZERO,
+            "finish must dock without consuming clock time"
+        );
+    }
+
+    #[test]
+    fn docked_lifts_on_travel() {
+        let mut app = docked_app();
+        app.selected_planet_index = 2;
+        app.ship.snap_to(2);
+
+        app.move_planet_right();
+
+        assert!(!app.is_docked(), "an actual travel must lift the dock");
+        assert_eq!(
+            app.ship.phase(),
+            crate::tui::animation::ShipPhase::Traveling
+        );
+    }
+
+    #[test]
+    fn docked_lifts_on_all_snap_to_paths() {
+        // D4: every snap_to path lifts the dock. return_to_star_map and
+        // return_from_session are App-level; the third snap_to path
+        // (click-select) lives in the mouse handler and is proven at the
+        // event layer by test_planet_click_docked_opens_other_click_selects_
+        // and_descends (asserting a same-card re-descend requires the lift).
+        let tier5_lesson = {
+            let probe = App::new();
+            probe
+                .available_lessons()
+                .into_iter()
+                .find(|l| l.tier == Tier::Tier5SpeedAndCadence)
+                .expect("fixture needs a Tier5 lesson")
+        };
+
+        let mut app = docked_app();
+        app.selected_lesson_index = app.flat_index_of(&tier5_lesson.id).unwrap();
+        app.current_view = CurrentView::PlanetLessons;
+
+        app.return_to_star_map();
+
+        assert_eq!(app.current_view, CurrentView::MainMenu);
+        assert!(!app.is_docked(), "return_to_star_map must lift the dock");
+
+        let mut app = docked_app();
+        let tier3_lesson = app
+            .available_lessons()
+            .into_iter()
+            .find(|l| l.tier == Tier::Tier3SpanishOrthography)
+            .expect("fixture needs a Tier3 lesson")
+            .clone();
+        app.start_practice(tier3_lesson);
+        app.current_view = CurrentView::Summary;
+
+        app.return_from_session();
+
+        assert_eq!(app.current_view, CurrentView::PlanetLessons);
+        assert!(!app.is_docked(), "return_from_session must lift the dock");
+        assert!(app.ship.is_idle(), "snap_to lands idle");
+    }
+
+    #[test]
+    fn docked_lifts_on_open_and_leave_planet_lessons() {
+        // open_planet_lessons: the direct flip ends the dock state.
+        let mut app = docked_app();
+        app.confirm_planet();
+        assert_eq!(app.current_view, CurrentView::PlanetLessons);
+        assert!(!app.is_docked(), "opening the lessons must lift the dock");
+
+        // leave_planet_lessons pins its own lift even though open already
+        // lifted in the real flow: leaving starts an ascend, and the
+        // invariant `docked => is_idle` forbids docked during it.
+        let mut app = docked_app();
+        app.leave_planet_lessons();
+        assert_eq!(
+            app.ship.phase(),
+            crate::tui::animation::ShipPhase::Ascending
+        );
+        assert!(!app.is_docked(), "leave must lift the dock by itself");
+    }
+
+    #[test]
+    fn saturated_nav_does_not_lift_dock() {
+        let mut app = docked_app();
+        app.selected_planet_index = Tier::ALL.len() - 1;
+        app.ship.snap_to(Tier::ALL.len() - 1);
+
+        app.move_planet_right();
+
+        assert_eq!(app.selected_planet_index, Tier::ALL.len() - 1);
+        assert!(
+            app.is_docked(),
+            "saturated nav moves nothing, so the dock must hold"
+        );
+        assert!(app.ship.is_idle());
+    }
+
+    #[test]
+    fn docked_invariant_docked_implies_idle() {
+        fn assert_invariant(app: &App) {
+            assert!(
+                !(app.is_docked() && !app.ship.is_idle()),
+                "invariant violated: docked while not idle"
+            );
+        }
+
+        let mut app = docked_app();
+        assert_invariant(&app);
+
+        app.move_planet_right(); // lift + travel
+        assert_invariant(&app);
+        app.finish_ship_animation();
+        assert_invariant(&app);
+
+        app.confirm_planet(); // descend again
+        assert_invariant(&app);
+        app.advance_animation(crate::tui::animation::DESCEND + Duration::from_millis(1));
+        assert_invariant(&app);
+
+        app.confirm_planet(); // open (direct flip)
+        assert_invariant(&app);
+        app.leave_planet_lessons(); // ascend
+        assert_invariant(&app);
+    }
+
+    #[test]
+    fn docked_does_not_auto_flip_view() {
+        let mut app = App::new();
+        app.user_progress = UserProgress::default();
+        app.selected_planet_index = Tier::Tier1Foundation.index();
+        app.ship = crate::tui::animation::ShipAnimation::new(app.selected_planet_index);
+
+        app.confirm_planet();
+        app.advance_animation(crate::tui::animation::DESCEND + Duration::from_millis(1));
+
+        assert!(app.is_docked());
+        assert_eq!(
+            app.current_view,
+            CurrentView::MainMenu,
+            "the dock itself must never flip the view (D2: auto-flip is gone)"
+        );
+
+        // Further ticks while docked keep the map on screen.
+        app.advance_animation(Duration::from_millis(100));
+        assert_eq!(app.current_view, CurrentView::MainMenu);
+        assert!(app.is_docked());
     }
 
     /// RED for task 4.2 / GREEN via tasks 4.3+4.4: an adaptive-drill pass

@@ -28,29 +28,31 @@ impl EventHandler {
         Ok(())
     }
 
-    /// Snaps any in-flight ship animation to its destination instantly,
-    /// so an event that actually acts on the map never has to wait for it.
-    fn finish_animation(app: &mut App) {
-        if !app.ship.is_idle() {
-            app.ship.complete();
-        }
-    }
-
     /// Handles a mouse event against the last known frame `area`. Only mouse
     /// kinds that actually act on the map (`Down(Left)`, `ScrollUp`,
-    /// `ScrollDown`) interrupt an in-flight ship animation; passive kinds
-    /// like `Moved`/`Drag`/`Up`/`Down(Right)` are fully ignored.
+    /// `ScrollDown`) interrupt an in-flight ship animation (routing it
+    /// through [`App::finish_ship_animation`]); passive kinds like
+    /// `Moved`/`Drag`/`Up`/`Down(Right)` are fully ignored.
     fn handle_mouse(app: &mut App, m: MouseEvent, area: Rect) -> io::Result<()> {
         if let MouseEventKind::Down(MouseButton::Left) = m.kind {
-            Self::finish_animation(app);
+            app.finish_ship_animation();
             let pos = Position::new(m.column, m.row);
             match app.current_view {
                 CurrentView::MainMenu => {
                     if let Some(i) = planet_at(map_body_area(area), pos, app.selected_planet_index)
                     {
-                        app.selected_planet_index = i;
-                        app.ship.snap_to(i);
-                        app.enter_planet_lessons();
+                        // D11 click part: clicking the docked (selected)
+                        // card confirms the dock and opens the lessons;
+                        // any other card selects it, snaps the ship there,
+                        // and starts a fresh descend.
+                        if i == app.selected_planet_index && app.is_docked() {
+                            app.confirm_planet();
+                        } else {
+                            app.selected_planet_index = i;
+                            app.ship.snap_to(i);
+                            app.docked = false;
+                            app.ship.descend();
+                        }
                     }
                 }
                 CurrentView::PlanetLessons => Self::handle_lesson_row_click(app, area, m.row),
@@ -62,7 +64,7 @@ impl EventHandler {
             // D11: the wheel scrolls the horizontal planet band — vertical
             // wheel directions map onto left/right moves in MainMenu.
             MouseEventKind::ScrollUp | MouseEventKind::ScrollLeft => {
-                Self::finish_animation(app);
+                app.finish_ship_animation();
                 match app.current_view {
                     CurrentView::MainMenu => app.move_planet_left(),
                     CurrentView::PlanetLessons => app.move_selection_up(),
@@ -70,7 +72,7 @@ impl EventHandler {
                 }
             }
             MouseEventKind::ScrollDown | MouseEventKind::ScrollRight => {
-                Self::finish_animation(app);
+                app.finish_ship_animation();
                 match app.current_view {
                     CurrentView::MainMenu => app.move_planet_right(),
                     CurrentView::PlanetLessons => app.move_selection_down(),
@@ -112,15 +114,12 @@ impl EventHandler {
             return;
         }
 
-        // Any keypress interrupts an in-flight ship animation, snapping it
-        // to its destination instantly instead of swallowing the key.
-        if !app.ship.is_idle() {
-            app.ship.complete();
-        }
-        // The animation just completed, so a pending view switch (dock into
-        // a planet lane) commits before dispatch: the key applies under the
-        // new view in the same cycle, never swallowed by the dock window.
-        app.commit_pending_view();
+        // Any keypress routes an in-flight ship animation through
+        // finish_ship_animation, snapping it to its destination instantly
+        // instead of swallowing the key — and docking it when the flight
+        // was a descend, so the key below dispatches under the landed
+        // state (e.g. a mid-descent Enter opens in the same press).
+        app.finish_ship_animation();
 
         match app.current_view {
             CurrentView::MainMenu => match key.code {
@@ -133,7 +132,7 @@ impl EventHandler {
                 KeyCode::Right | KeyCode::Char('l') => app.move_planet_right(),
                 KeyCode::Home | KeyCode::Char('g') => app.planet_home(),
                 KeyCode::End | KeyCode::Char('G') => app.planet_end(),
-                KeyCode::Enter => app.enter_planet_lessons(),
+                KeyCode::Enter => app.confirm_planet(),
                 KeyCode::Char('v') | KeyCode::Char('V') => app.start_dictation(None, None),
                 KeyCode::Char('d') | KeyCode::Char('D') => app.start_adaptive_drill(),
                 KeyCode::Char('e') | KeyCode::Char('E') => app.current_view = CurrentView::Stats,
@@ -256,8 +255,18 @@ mod tests {
         mouse(MouseEventKind::Down(MouseButton::Left), pos)
     }
 
+    /// Two-step Enter (D2): the first press starts the descend; the second
+    /// lands inside the dock window and fast-paths — the handler finishes
+    /// the dock and the same key dispatches `confirm_planet`, opening the
+    /// lessons. Replaces the old `enter_planet_lessons` + settle idiom.
+    fn open_selected_planet_lessons(app: &mut App) {
+        EventHandler::handle_key(app, key(KeyCode::Enter));
+        EventHandler::handle_key(app, key(KeyCode::Enter));
+        assert_eq!(app.current_view, CurrentView::PlanetLessons);
+    }
+
     #[test]
-    fn test_left_click_on_planet_card_selects_and_opens_planetlessons() {
+    fn test_left_click_on_planet_card_selects_and_descends() {
         let mut app = App::new();
         app.user_progress = UserProgress::default();
         let area = Rect::new(0, 0, 120, 40);
@@ -266,12 +275,16 @@ mod tests {
         let pos = Position::new(card.x + card.width / 2, card.y + card.height / 2);
 
         EventHandler::handle_mouse(&mut app, left_click(pos), area).unwrap();
-        // Mouse never commits the pending view itself: complete the dock so
-        // the deferred PlanetLessons switch goes through before asserting.
+        // Settle the click's descend so the dock state is observable.
         app.advance_animation(crate::tui::animation::DESCEND + std::time::Duration::from_millis(1));
 
         assert_eq!(app.selected_planet_index, 3);
-        assert_eq!(app.current_view, CurrentView::PlanetLessons);
+        assert_eq!(
+            app.current_view,
+            CurrentView::MainMenu,
+            "a click docks at the card; opening needs a confirm on the docked card"
+        );
+        assert!(app.is_docked());
     }
 
     #[test]
@@ -292,10 +305,9 @@ mod tests {
         let mut app = App::new();
         app.user_progress = UserProgress::default();
         app.selected_planet_index = Tier::Tier1Foundation.index();
-        app.enter_planet_lessons();
-        // Deferred view switch: complete the dock first, so the click below
-        // dispatches under PlanetLessons (lesson rows), not MainMenu.
-        app.advance_animation(crate::tui::animation::DESCEND + std::time::Duration::from_millis(1));
+        // Two-step Enter: the click below must dispatch under PlanetLessons
+        // (lesson rows), not MainMenu.
+        open_selected_planet_lessons(&mut app);
         let area = Rect::new(0, 0, 120, 40);
         let list_area = lesson_list_area(area);
         let rows = app.current_tier_rows();
@@ -324,10 +336,9 @@ mod tests {
         let mut app = App::new();
         app.user_progress = UserProgress::default();
         app.selected_planet_index = Tier::Tier1Foundation.index();
-        app.enter_planet_lessons();
-        // Deferred view switch: complete the dock first, so the click below
-        // dispatches under PlanetLessons (lesson rows), not MainMenu.
-        app.advance_animation(crate::tui::animation::DESCEND + std::time::Duration::from_millis(1));
+        // Two-step Enter: the click below must dispatch under PlanetLessons
+        // (lesson rows), not MainMenu.
+        open_selected_planet_lessons(&mut app);
         let area = Rect::new(0, 0, 120, 40);
         let list_area = lesson_list_area(area);
         let rows = app.current_tier_rows();
@@ -361,8 +372,7 @@ mod tests {
         let card = cards[3];
         let pos = Position::new(card.x + card.width / 2, card.y + card.height / 2);
         EventHandler::handle_mouse(&mut app, left_click(pos), area).unwrap();
-        // Mouse never commits the pending view itself: complete the dock so
-        // the deferred PlanetLessons switch goes through before asserting.
+        // Settle the click's descend so the final dock state is observable.
         app.advance_animation(crate::tui::animation::DESCEND + std::time::Duration::from_millis(1));
 
         assert_ne!(
@@ -370,7 +380,12 @@ mod tests {
             crate::tui::animation::ShipPhase::Traveling
         );
         assert!((app.ship.position() - 3.0).abs() < 1e-5);
-        assert_eq!(app.current_view, CurrentView::PlanetLessons);
+        assert_eq!(
+            app.current_view,
+            CurrentView::MainMenu,
+            "the click selects and docks; opening needs a confirm on the docked card"
+        );
+        assert!(app.is_docked());
     }
 
     #[test]
@@ -458,10 +473,9 @@ mod tests {
         let mut app = App::new();
         app.user_progress = UserProgress::default();
         app.selected_planet_index = Tier::Tier1Foundation.index();
-        app.enter_planet_lessons();
-        // Deferred view switch: complete the dock so the scroll below acts on
-        // the lesson list (MainMenu scroll would move the planet selection).
-        app.advance_animation(crate::tui::animation::DESCEND + std::time::Duration::from_millis(1));
+        // Two-step Enter: the scroll below must act on the lesson list
+        // (MainMenu scroll would move the planet selection).
+        open_selected_planet_lessons(&mut app);
         app.move_selection_down();
         let before = app.selected_lesson_index;
         EventHandler::handle_mouse(
@@ -478,10 +492,9 @@ mod tests {
         let mut app = App::new();
         app.user_progress = UserProgress::default();
         app.selected_planet_index = Tier::Tier1Foundation.index();
-        app.enter_planet_lessons();
-        // Deferred view switch: complete the dock so the click below hits the
-        // lesson row under PlanetLessons semantics.
-        app.advance_animation(crate::tui::animation::DESCEND + std::time::Duration::from_millis(1));
+        // Two-step Enter: the click below must hit the lesson row under
+        // PlanetLessons semantics.
+        open_selected_planet_lessons(&mut app);
         let before_lesson = app.selected_lesson_index;
         let area = Rect::new(0, 0, 120, 40);
         let list_area = lesson_list_area(area);
@@ -510,7 +523,9 @@ mod tests {
             let mut app = App::new();
             app.user_progress = UserProgress::default();
             app.selected_planet_index = Tier::Tier3SpanishOrthography.index();
-            app.enter_planet_lessons();
+            // Two-step Enter: the leave keys below must act on an actually
+            // open PlanetLessons view.
+            open_selected_planet_lessons(&mut app);
 
             EventHandler::handle_key(&mut app, key(code));
 
@@ -528,18 +543,141 @@ mod tests {
     }
 
     #[test]
-    fn test_mainmenu_enter_opens_planetlessons() {
+    fn test_mainmenu_enter_twice_opens_lessons() {
+        let mut app = App::new();
+        app.user_progress = UserProgress::default();
+        app.selected_planet_index = Tier::Tier2FullAlphabet.index();
+
+        // First Enter: the descend starts and the map stays on screen.
+        EventHandler::handle_key(&mut app, key(KeyCode::Enter));
+        app.advance_animation(crate::tui::animation::DESCEND + std::time::Duration::from_millis(1));
+        assert_eq!(app.current_view, CurrentView::MainMenu);
+        assert!(app.is_docked(), "the settled descend docks the ship");
+
+        // Second Enter: the docked ship confirms and the lessons open.
+        EventHandler::handle_key(&mut app, key(KeyCode::Enter));
+
+        assert_eq!(app.current_view, CurrentView::PlanetLessons);
+        let selected = app.selected_lesson().expect("a lesson must be selected");
+        assert_eq!(selected.tier, Tier::Tier2FullAlphabet);
+    }
+
+    #[test]
+    fn test_mainmenu_single_enter_without_settle_stays_mainmenu() {
         let mut app = App::new();
         app.user_progress = UserProgress::default();
         app.selected_planet_index = Tier::Tier2FullAlphabet.index();
 
         EventHandler::handle_key(&mut app, key(KeyCode::Enter));
-        // Deferred view switch: complete the dock so the pending view commits.
-        app.advance_animation(crate::tui::animation::DESCEND + std::time::Duration::from_millis(1));
+
+        assert_eq!(
+            app.ship.phase(),
+            crate::tui::animation::ShipPhase::Descending
+        );
+        assert!(!app.is_docked());
+        assert_eq!(
+            app.current_view,
+            CurrentView::MainMenu,
+            "one Enter alone must never flip the view"
+        );
+    }
+
+    #[test]
+    fn test_docked_left_lifts_and_travels() {
+        let mut app = App::new();
+        app.user_progress = UserProgress::default();
+        app.selected_planet_index = 3;
+        app.ship = crate::tui::animation::ShipAnimation::new(3);
+        app.confirm_planet();
+        app.finish_ship_animation();
+        assert!(app.is_docked());
+
+        EventHandler::handle_key(&mut app, key(KeyCode::Left));
+
+        assert_eq!(app.selected_planet_index, 2);
+        assert!(!app.is_docked(), "an actual travel must lift the dock");
+        assert_eq!(
+            app.ship.phase(),
+            crate::tui::animation::ShipPhase::Traveling
+        );
+    }
+
+    #[test]
+    fn test_keys_never_swallowed_during_dock_window() {
+        let mut app = App::new();
+        app.user_progress = UserProgress::default();
+        app.selected_planet_index = Tier::Tier2FullAlphabet.index();
+        app.ship = crate::tui::animation::ShipAnimation::new(app.selected_planet_index);
+
+        // Mid-descent (inside the dock window): a single Enter must BOTH
+        // finish the dock and dispatch — one press opens, never swallowed.
+        app.confirm_planet();
+        assert_eq!(
+            app.ship.phase(),
+            crate::tui::animation::ShipPhase::Descending
+        );
+
+        EventHandler::handle_key(&mut app, key(KeyCode::Enter));
+
+        assert_eq!(
+            app.current_view,
+            CurrentView::PlanetLessons,
+            "Enter inside the dock window must finish the dock and open"
+        );
+        assert!(!app.is_docked(), "opening lifts the dock");
+        let selected = app.selected_lesson().expect("a lesson must be selected");
+        assert_eq!(selected.tier, Tier::Tier2FullAlphabet);
+    }
+
+    #[test]
+    fn test_planet_click_docked_opens_other_click_selects_and_descends() {
+        let area = Rect::new(0, 0, 120, 40);
+        let map = map_body_area(area);
+
+        // Arm 1: clicking the DOCKED (selected) card confirms the dock and
+        // opens its lessons (D11 click part).
+        let mut app = App::new();
+        app.user_progress = UserProgress::default();
+        app.selected_planet_index = 0;
+        app.ship = crate::tui::animation::ShipAnimation::new(0);
+        app.confirm_planet();
+        app.finish_ship_animation();
+        assert!(app.is_docked());
+
+        let card0 = planet_layout(map, app.selected_planet_index)[0];
+        let pos0 = Position::new(card0.x + card0.width / 2, card0.y + card0.height / 2);
+        EventHandler::handle_mouse(&mut app, left_click(pos0), area).unwrap();
 
         assert_eq!(app.current_view, CurrentView::PlanetLessons);
         let selected = app.selected_lesson().expect("a lesson must be selected");
-        assert_eq!(selected.tier, Tier::Tier2FullAlphabet);
+        assert_eq!(selected.tier, Tier::ALL[0]);
+
+        // Arm 2: clicking ANOTHER card while docked selects it, snaps, and
+        // starts a fresh descend — the dock lifts because the selection
+        // actually moved (snap_to path).
+        let mut app = App::new();
+        app.user_progress = UserProgress::default();
+        app.selected_planet_index = 0;
+        app.ship = crate::tui::animation::ShipAnimation::new(0);
+        app.confirm_planet();
+        app.finish_ship_animation();
+        assert!(app.is_docked());
+
+        let card3 = planet_layout(map, app.selected_planet_index)[3];
+        let pos3 = Position::new(card3.x + card3.width / 2, card3.y + card3.height / 2);
+        EventHandler::handle_mouse(&mut app, left_click(pos3), area).unwrap();
+
+        assert_eq!(app.selected_planet_index, 3);
+        assert_eq!(
+            app.current_view,
+            CurrentView::MainMenu,
+            "an other-card click docks at it; it never opens directly"
+        );
+        assert!(!app.is_docked(), "the snap_to reselect must lift the dock");
+        assert_eq!(
+            app.ship.phase(),
+            crate::tui::animation::ShipPhase::Descending
+        );
     }
 
     #[test]
@@ -858,12 +996,6 @@ mod tests {
             ("Home", 4, key(KeyCode::Home), MenuEffect::PlanetIndex(0)),
             ("g", 4, key(KeyCode::Char('g')), MenuEffect::PlanetIndex(0)),
             (
-                "Enter",
-                2,
-                key(KeyCode::Enter),
-                MenuEffect::View(CurrentView::PlanetLessons),
-            ),
-            (
                 "e",
                 0,
                 key(KeyCode::Char('e')),
@@ -902,9 +1034,8 @@ mod tests {
             app.selected_planet_index = start_index;
 
             EventHandler::handle_key(&mut app, evt);
-            // Deferred view switch: a uniform advance is safe for every case
-            // — it completes in-flight travels (landing the assertions on the
-            // snap target) and commits the dock for the Enter case.
+            // A uniform advance is safe for every table case — it settles
+            // in-flight travels so the assertions land on the snap target.
             app.advance_animation(
                 crate::tui::animation::DESCEND + std::time::Duration::from_millis(1),
             );
@@ -924,6 +1055,25 @@ mod tests {
                 ),
             }
         }
+
+        // Enter is two-step since D2 (dock, then confirm) and cannot ride the
+        // single-key table: first press docks without flipping, second opens.
+        let mut app = App::new();
+        app.user_progress = UserProgress::default();
+        app.selected_planet_index = 2;
+        EventHandler::handle_key(&mut app, key(KeyCode::Enter));
+        app.advance_animation(crate::tui::animation::DESCEND + std::time::Duration::from_millis(1));
+        assert_eq!(
+            app.current_view,
+            CurrentView::MainMenu,
+            "first Enter docks without flipping the view"
+        );
+        EventHandler::handle_key(&mut app, key(KeyCode::Enter));
+        assert_eq!(
+            app.current_view,
+            CurrentView::PlanetLessons,
+            "second Enter confirms the dock and opens"
+        );
     }
 
     #[test]
@@ -932,7 +1082,8 @@ mod tests {
             let mut app = App::new();
             app.user_progress = UserProgress::default();
             app.selected_planet_index = Tier::Tier1Foundation.index();
-            app.enter_planet_lessons();
+            // Two-step Enter: reach a genuinely open PlanetLessons view.
+            open_selected_planet_lessons(&mut app);
             app
         }
 

@@ -1,6 +1,8 @@
 use crate::core::model::{Lesson, PlanetStatus, SessionKind, SessionRecord, Tier};
 use crate::core::Curriculum;
-use crate::tui::animation::{PLANET_FRAME_COUNT, PLANET_IDLE_PERIOD, ShipPhase, planet_frame_index};
+use crate::tui::animation::{
+    PLANET_DOCKED_PERIOD, PLANET_FRAME_COUNT, PLANET_IDLE_PERIOD, ShipPhase, planet_frame_index,
+};
 use crate::tui::app::{App, CurrentView};
 use crate::tui::ascii::AsciiArt;
 use crate::tui::components::{
@@ -18,6 +20,7 @@ use ratatui::{
     widgets::{Paragraph, Wrap},
     Frame,
 };
+use std::time::Duration;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 /// Maps a [`PlanetStatus`] to its galaxy-map glyph, colour, and Spanish
@@ -235,15 +238,9 @@ fn render_main_menu(f: &mut Frame, app: &App) {
     // so the selected planet stays visible.
     let tier_progress = Curriculum::all_tier_progress(&app.user_progress);
     let planet_rects = planet_layout(map_area, app.selected_planet_index);
+    // Ambient planet frame: cycles with the ship's monotonic mission clock.
+    // The docked planet breathes slower (D5) — see planet_frame_period.
     let is_full_mode = map_mode(map_area) == MapMode::Full;
-
-    // Ambient planet frame: cycles with the ship's monotonic mission clock
-    // at the idle period (docked-rate variation arrives in a later slice).
-    let frame = planet_frame_index(
-        app.ship.total_elapsed(),
-        PLANET_IDLE_PERIOD,
-        PLANET_FRAME_COUNT,
-    );
 
     for (i, (tp, rect)) in tier_progress.iter().zip(planet_rects.iter()).enumerate() {
         if rect.width == 0 || rect.height == 0 {
@@ -252,6 +249,11 @@ fn render_main_menu(f: &mut Frame, app: &App) {
 
         let (glyph, color, badge) = planet_style(tp.status);
         let is_selected = i == app.selected_planet_index;
+        let frame = planet_frame_index(
+            app.ship.total_elapsed(),
+            planet_frame_period(app.is_docked() && is_selected),
+            PLANET_FRAME_COUNT,
+        );
         let text_style = if tp.status == PlanetStatus::Unexplored {
             Style::default().fg(Theme::MUTED)
         } else {
@@ -365,7 +367,7 @@ fn render_main_menu(f: &mut Frame, app: &App) {
         Span::styled("[←/→ h/l] ", Style::default().fg(Theme::PRIMARY).add_modifier(Modifier::BOLD)),
         Span::styled("Planeta  ", Style::default().fg(Theme::TEXT)),
         Span::styled("[ENTER] ", Style::default().fg(Theme::SUCCESS).add_modifier(Modifier::BOLD)),
-        Span::styled("Explorar  ", Style::default().fg(Theme::TEXT)),
+        Span::styled("Aterrizar/Abrir  ", Style::default().fg(Theme::TEXT)),
         Span::styled("[V] ", Style::default().fg(Theme::SECONDARY).add_modifier(Modifier::BOLD)),
         Span::styled("Dictado  ", Style::default().fg(Theme::TEXT)),
         Span::styled("[D] ", Style::default().fg(Theme::ACCENT).add_modifier(Modifier::BOLD)),
@@ -390,6 +392,18 @@ fn render_main_menu(f: &mut Frame, app: &App) {
 /// (reversing while [`ShipPhase::Ascending`]). A WARP_TRAIL underlay
 /// streaks behind the ship (left of it) during [`ShipPhase::Traveling`],
 /// flicker-synced with the thruster frames.
+/// Sprite-frame cycling period for one planet (D5): the planet the ship is
+/// docked at breathes at the slower [`PLANET_DOCKED_PERIOD`]; every other
+/// planet (and every planet while nothing is docked) keeps the ambient
+/// [`PLANET_IDLE_PERIOD`].
+fn planet_frame_period(docked_at_planet: bool) -> Duration {
+    if docked_at_planet {
+        PLANET_DOCKED_PERIOD
+    } else {
+        PLANET_IDLE_PERIOD
+    }
+}
+
 fn render_ship_sprite(f: &mut Frame, map_area: Rect, planet_rects: &[Rect], app: &App) {
     let gutter = ship_gutter(map_area);
     let frame_idx = app.ship.frame_index();
@@ -401,13 +415,24 @@ fn render_ship_sprite(f: &mut Frame, map_area: Rect, planet_rects: &[Rect], app:
         return; // degenerate layout: no visible planet to fly over
     }
 
+    // D9 docked render: a docked ship renders as a fully-settled descend —
+    // ship_y maps Descending + dock_depth 1.0 onto the card's top row.
+    // Passing the real (Idle) phase would park it back in the gutter,
+    // because `ship_y` short-circuits Idle to the lane core row and
+    // `dock_depth()` itself returns 0.0 when idle.
+    let (phase, dock_depth) = if app.is_docked() {
+        (ShipPhase::Descending, 1.0)
+    } else {
+        (app.ship.phase(), app.ship.dock_depth())
+    };
+
     let center_x = ship_x(planet_rects, app.ship.position());
     let center_y = ship_y(
         gutter,
         planet_rects,
         app.selected_planet_index,
-        app.ship.phase(),
-        app.ship.dock_depth(),
+        phase,
+        dock_depth,
     );
 
     // Center → top-left conversion, clamped inside the map body so the
@@ -1260,7 +1285,7 @@ mod tests {
         app.user_progress = UserProgress::default();
         app.selected_planet_index = Tier::Tier4NumbersAndSymbols.index();
         app.ship = crate::tui::animation::ShipAnimation::new(app.selected_planet_index);
-        app.enter_planet_lessons();
+        app.confirm_planet();
         // Mid-dock: advance exactly to the cubic-out t where progress() ==
         // 0.5, so the ship's lane x is the midpoint of the ~6-cell dock.
         let half_t = crate::tui::animation::DESCEND.mul_f32(1.0 - (0.5f64).cbrt() as f32);
@@ -1350,7 +1375,7 @@ mod tests {
         // loads the developer's saved progress); park it on the target so
         // the dock below happens at the selected card, like Enter does.
         app.ship.snap_to(app.selected_planet_index);
-        app.enter_planet_lessons();
+        app.confirm_planet();
         // Advance to the cubic-out midpoint of DESCEND: dock_depth == 0.5
         // puts the ship's lane y halfway between flight lane and card top.
         let half_t = crate::tui::animation::DESCEND.mul_f32(1.0 - (0.5f64).cbrt() as f32);
@@ -1359,7 +1384,7 @@ mod tests {
         assert_eq!(
             app.current_view,
             CurrentView::MainMenu,
-            "the view must not flip until the dock completes"
+            "the dock itself must never flip the view (only a second Enter opens)"
         );
 
         let backend = TestBackend::new(120, 40);
@@ -1367,8 +1392,8 @@ mod tests {
         terminal.draw(|f| render(f, &app)).unwrap();
         let buffer = terminal.backend().buffer();
 
-        // MainMenu keeps rendering, docking ship included, until the dock
-        // finishes; only then does the deferred view switch go through.
+        // MainMenu keeps rendering, docking ship included, for the whole
+        // descent; the docked state it lands in is the map's to keep.
         let rendered = render_to_string(&app, 120, 40);
         assert!(
             rendered.contains("◄███►"),
@@ -1406,6 +1431,137 @@ mod tests {
             "docking ship must stay over the target card ({}..{}), found leftmost glyph at x {ship_col}",
             card.x,
             card.x + card.width
+        );
+    }
+
+    #[test]
+    fn docked_ship_pinned_to_lane_core() {
+        let mut app = App::new();
+        app.user_progress = UserProgress::default();
+        app.selected_planet_index = 0;
+        app.ship = crate::tui::animation::ShipAnimation::new(0);
+        app.confirm_planet();
+        app.finish_ship_animation();
+        assert!(app.is_docked());
+
+        let backend = TestBackend::new(120, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| render(f, &app)).unwrap();
+        let buffer = terminal.backend().buffer();
+
+        let map = map_body_area(Rect::new(0, 0, 120, 40));
+        let card = planet_layout(map, app.selected_planet_index)[app.selected_planet_index];
+        let gutter = ship_gutter(map);
+        let gutter_core_y = gutter.y + gutter.height / 2;
+
+        // Collect the rows carrying the ship's ◄/► markers (exclusive to
+        // the ship sprite; planet sprites never use them).
+        let mut ship_rows: Vec<u16> = Vec::new();
+        for y in 0..buffer.area().height {
+            for x in 0..buffer.area().width {
+                if matches!(
+                    buffer
+                        .cell(ratatui::layout::Position::new(x, y))
+                        .map(|c| c.symbol()),
+                    Some("◄" | "►")
+                ) {
+                    ship_rows.push(y);
+                }
+            }
+        }
+        assert!(!ship_rows.is_empty(), "docked ship must render its sprite");
+
+        // D9: the docked ship stays pinned into the target card's sprite
+        // lane (its marker row is the card's top row), instead of popping
+        // back out to the gutter's core row the way an idle ship would.
+        assert!(
+            ship_rows.contains(&card.y),
+            "docked ship's marker row must be the card's top row {}, found {ship_rows:?}",
+            card.y
+        );
+        assert!(
+            !ship_rows.contains(&gutter_core_y),
+            "docked ship must not sit in the gutter core row {gutter_core_y}"
+        );
+    }
+
+    /// Extracts a full `width`-cell row string from a rendered buffer —
+    /// the cell-by-cell ground truth for sprite-frame assertions.
+    fn buffer_row_string(buffer: &ratatui::buffer::Buffer, x: u16, y: u16, width: u16) -> String {
+        (x..x + width)
+            .map(|cx| {
+                buffer
+                    .cell(ratatui::layout::Position::new(cx, y))
+                    .map(|c| c.symbol().to_string())
+                    .unwrap_or_default()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn docked_planet_frame_period_is_slower() {
+        let mut app = App::new();
+        app.user_progress = UserProgress::default();
+        app.selected_planet_index = 0;
+        app.ship = crate::tui::animation::ShipAnimation::new(0);
+        app.confirm_planet();
+        app.finish_ship_animation(); // docks with total_elapsed still ZERO
+        assert!(app.is_docked());
+
+        let area = Rect::new(0, 0, 120, 40);
+        let map = map_body_area(area);
+        let cards = planet_layout(map, app.selected_planet_index);
+        let card0 = cards[0];
+        let card1 = cards[1];
+
+        // Ground-truth sprite rows: Tier1 differs on every row (use the
+        // ship-free third row of the selected card's lane — the docked
+        // ship covers at most rows card.y-2..card.y+1); Tier2 differs only
+        // on its middle row.
+        let tier1_row2: Vec<&str> = AsciiArt::PLANET_SPRITES[0]
+            .iter()
+            .map(|sprite| sprite.lines().nth(2).unwrap())
+            .collect();
+        assert_ne!(tier1_row2[0], tier1_row2[1], "fixture: Tier1 frame row 2 must differ");
+        let tier2_row1: Vec<&str> = AsciiArt::PLANET_SPRITES[1]
+            .iter()
+            .map(|sprite| sprite.lines().nth(1).unwrap())
+            .collect();
+        assert_ne!(tier2_row1[0], tier2_row1[1], "fixture: Tier2 frame row 1 must differ");
+
+        let pad = |line: &str| format!("{:<width$}", line, width = PLANET_CARD_WIDTH as usize);
+
+        // t = 800ms: at the idle period every planet would already be on
+        // frame 1; the docked selected planet must still hold frame 0.
+        app.advance_animation(std::time::Duration::from_millis(800));
+        let backend = TestBackend::new(120, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| render(f, &app)).unwrap();
+        let buffer = terminal.backend().buffer();
+
+        assert_eq!(
+            buffer_row_string(buffer, card0.x, card0.y + 2, PLANET_CARD_WIDTH),
+            pad(tier1_row2[0]),
+            "docked selected planet must still show frame 0 at the idle period's flip point"
+        );
+        assert_eq!(
+            buffer_row_string(buffer, card1.x, card1.y + 1, PLANET_CARD_WIDTH),
+            pad(tier2_row1[1]),
+            "non-selected planets keep cycling at the idle period (frame 1 at t=800ms)"
+        );
+
+        // t = 2400ms: the docked period completes its first cycle and the
+        // docked planet flips to frame 1.
+        app.advance_animation(std::time::Duration::from_millis(1600));
+        let backend = TestBackend::new(120, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| render(f, &app)).unwrap();
+        let buffer = terminal.backend().buffer();
+
+        assert_eq!(
+            buffer_row_string(buffer, card0.x, card0.y + 2, PLANET_CARD_WIDTH),
+            pad(tier1_row2[1]),
+            "docked selected planet must flip to frame 1 at one full docked period"
         );
     }
 
@@ -1562,15 +1718,23 @@ mod tests {
         assert_eq!(lesson_list_area(area), map_body_area(area));
     }
 
+    /// Two-step Enter through the public API (D2): confirm starts the
+    /// descend, finish docks it, the second confirm opens. Leaves the app
+    /// in PlanetLessons — replaces the old `enter_planet_lessons` + settle
+    /// setup idiom.
+    fn open_lessons_via_two_step_enter(app: &mut App) {
+        app.confirm_planet();
+        app.finish_ship_animation();
+        app.confirm_planet();
+        assert_eq!(app.current_view, CurrentView::PlanetLessons);
+    }
+
     #[test]
     fn test_planet_lessons_view_lists_only_selected_tier() {
         let mut app = App::new();
         app.user_progress = UserProgress::default();
         app.selected_planet_index = Tier::Tier1Foundation.index();
-        app.enter_planet_lessons();
-        // Deferred view switch: complete the dock so the render below draws
-        // PlanetLessons (not the MainMenu with the docking ship).
-        app.advance_animation(crate::tui::animation::DESCEND + std::time::Duration::from_millis(1));
+        open_lessons_via_two_step_enter(&mut app);
 
         let tier1_title = app
             .available_lessons()
@@ -1597,7 +1761,7 @@ mod tests {
         let mut app = App::new();
         app.user_progress = UserProgress::default();
         app.selected_planet_index = Tier::Tier1Foundation.index();
-        app.enter_planet_lessons();
+        open_lessons_via_two_step_enter(&mut app);
 
         let rendered = render_to_string(&app, 1, 1);
         assert_eq!(rendered.chars().count(), 1);
@@ -1608,10 +1772,7 @@ mod tests {
         let mut app = App::new();
         app.user_progress = UserProgress::default();
         app.selected_planet_index = Tier::Tier1Foundation.index();
-        app.enter_planet_lessons();
-        // Deferred view switch: complete the dock so the render below draws
-        // PlanetLessons (not the MainMenu with the docking ship).
-        app.advance_animation(crate::tui::animation::DESCEND + std::time::Duration::from_millis(1));
+        open_lessons_via_two_step_enter(&mut app);
 
         let section_title = Curriculum::all_sections()
             .into_iter()

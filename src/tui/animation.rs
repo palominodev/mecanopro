@@ -22,6 +22,11 @@ pub const PLANET_FRAME_COUNT: usize = 2;
 /// Cycling period of planet sprite frames while the ship is parked
 /// (ambient variation cadence, not tied to any [`ShipPhase`]).
 pub const PLANET_IDLE_PERIOD: Duration = Duration::from_millis(800);
+/// Cycling period of the DOCKED planet's sprite frames (D5): slower than
+/// [`PLANET_IDLE_PERIOD`] so the docked world reads as settled-in. Applies
+/// only to the planet the ship is docked at; every other planet keeps the
+/// idle period.
+pub const PLANET_DOCKED_PERIOD: Duration = Duration::from_millis(2400);
 
 /// Discrete state of the ship's animation state machine.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
