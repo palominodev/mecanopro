@@ -9,6 +9,33 @@ use crate::tui::animation::{ShipAnimation, ShipPhase};
 use crate::tui::planet_layout::{build_rows, MenuRow};
 use std::time::{Duration, Instant};
 
+/// D10: env pin enabling reduced motion. Read exactly once per `App`
+/// construction (`with_repository`); value `"1"` means on. No runtime
+/// re-read and no settings UI — the hot path never touches the env.
+const REDUCED_MOTION_ENV: &str = "MECANOPRO_REDUCED_MOTION";
+
+/// Test-only parallelism guard for [`REDUCED_MOTION_ENV`]. The lib tests
+/// run on parallel threads and every `App::new()`/`with_repository` reads
+/// the variable, so the env-mutating reduced-motion test's construction
+/// window (widened by `SystemTtsSpeaker`'s filesystem probes) leaked the
+/// pin into sibling constructions — observed as 1–6 flaky failures in 8
+/// of 10 runs before this lock. Choice: an `RwLock` instead of a plain
+/// `Mutex`, so the hundreds of non-mutating `App::new()` constructions
+/// keep running fully in parallel (read lock) while the single env test
+/// takes the write lock for its whole mutation window. `App::new()` takes
+/// the read side under `#[cfg(test)]`; production builds are unchanged.
+#[cfg(test)]
+pub(crate) static REDUCED_MOTION_ENV_RW: std::sync::RwLock<()> = std::sync::RwLock::new(());
+
+/// Reader side of [`REDUCED_MOTION_ENV_RW`]; a poisoned lock is fine — a
+/// panicked sibling test must not cascade into unrelated failures.
+#[cfg(test)]
+fn reduced_motion_env_read() -> std::sync::RwLockReadGuard<'static, ()> {
+    REDUCED_MOTION_ENV_RW
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CurrentView {
     MainMenu,
@@ -42,11 +69,20 @@ pub struct App {
     pub tts_speaker: SystemTtsSpeaker,
     pub should_quit: bool,
     pub ship: ShipAnimation,
+    /// D10 reduced motion: `true` when `MECANOPRO_REDUCED_MOTION == "1"` at
+    /// construction. Transitions then start and immediately finish (the
+    /// dock lands instantly) and every render call site pins its sprite
+    /// frame to 0, so nothing on screen animates.
+    pub reduced_motion: bool,
     pub last_tick: Instant,
 }
 
 impl App {
     pub fn new() -> Self {
+        // Under `cargo test`, serialize this construction against the one
+        // env-mutating reduced-motion test (see REDUCED_MOTION_ENV_RW).
+        #[cfg(test)]
+        let _env_read = reduced_motion_env_read();
         Self::with_repository(ProgressRepository::new())
     }
 
@@ -61,6 +97,8 @@ impl App {
         let user_progress = repository.load();
         let tts_speaker = SystemTtsSpeaker::new();
         let selected_planet_index = user_progress.unlocked_tier.index();
+        // D10: read once, here — never in the render/event hot path.
+        let reduced_motion = std::env::var(REDUCED_MOTION_ENV).as_deref() == Ok("1");
 
         Self {
             current_view: CurrentView::MainMenu,
@@ -77,6 +115,7 @@ impl App {
             tts_speaker,
             should_quit: false,
             ship: ShipAnimation::new(selected_planet_index),
+            reduced_motion,
             last_tick: Instant::now(),
         }
     }
@@ -127,11 +166,24 @@ impl App {
         }
     }
 
+    /// D10 reduced motion: called right after any transition starts, so the
+    /// flight/descend/ascend completes in the same call — motion-sensitive
+    /// users see only the result, never the animation.
+    fn settle_instantly_if_reduced(&mut self) {
+        if self.reduced_motion {
+            self.finish_ship_animation();
+        }
+    }
+
     /// Event-poll interval: fast (16ms, ~60fps) while the ship animates or
     /// while the galaxy map is on screen (it always animates — ambient
-    /// planet frames), slow (50ms) elsewhere to avoid burning CPU.
+    /// planet frames), slow (50ms) elsewhere to avoid burning CPU. Reduced
+    /// motion (D10) short-circuits to the slow cadence: nothing animates,
+    /// so nothing justifies the fast poll.
     pub fn poll_interval(&self) -> Duration {
-        if !self.ship.is_idle() || self.current_view == CurrentView::MainMenu {
+        if self.reduced_motion {
+            Duration::from_millis(50)
+        } else if !self.ship.is_idle() || self.current_view == CurrentView::MainMenu {
             Duration::from_millis(16)
         } else {
             Duration::from_millis(50)
@@ -350,6 +402,7 @@ impl App {
             self.open_planet_lessons();
         } else {
             self.ship.descend();
+            self.settle_instantly_if_reduced();
         }
     }
 
@@ -401,6 +454,7 @@ impl App {
         self.current_view = CurrentView::MainMenu;
         self.docked = false;
         self.ship.ascend();
+        self.settle_instantly_if_reduced();
     }
 
     /// Returns from a finished/aborted practice session to
@@ -485,6 +539,7 @@ impl App {
         if self.selected_planet_index != before {
             self.docked = false;
             self.ship.travel_to(self.selected_planet_index);
+            self.settle_instantly_if_reduced();
         }
     }
 
@@ -614,6 +669,18 @@ mod tests {
     use crate::core::model::{BestScore, PlanetStatus, Tier};
 
     #[test]
+    fn reduced_motion_off_by_default() {
+        // No MECANOPRO_REDUCED_MOTION in the ambient environment (the env
+        // test below restores it), so a freshly constructed App must keep
+        // the full animation experience.
+        let app = App::new();
+        assert!(
+            !app.reduced_motion,
+            "without the env pin, reduced motion must stay off"
+        );
+    }
+
+    #[test]
     fn test_open_planet_lessons_matches_selected_tier() {
         let mut app = App::new();
         app.user_progress = UserProgress::default();
@@ -624,6 +691,70 @@ mod tests {
         assert_eq!(app.current_view, CurrentView::PlanetLessons);
         let selected = app.selected_lesson().expect("a lesson must be selected");
         assert_eq!(selected.tier, Tier::Tier2FullAlphabet);
+    }
+
+    /// RAII guard pinning `MECANOPRO_REDUCED_MOTION=1` for a single App
+    /// construction and restoring the previous value on drop — even when an
+    /// assertion inside the test panics. This is the ONLY env mutation in
+    /// the whole suite; the caller holds REDUCED_MOTION_ENV_RW's write side
+    /// for the whole mutation window, and the window itself is kept to one
+    /// construction by scoping the guard tighter than the assertions.
+    struct ReducedMotionEnvRestore(Option<String>);
+
+    impl ReducedMotionEnvRestore {
+        fn pin_enabled() -> Self {
+            let previous = std::env::var(REDUCED_MOTION_ENV).ok();
+            // SAFETY: single-writer discipline — the only test that mutates
+            // the environment, and only while this guard is alive.
+            unsafe { std::env::set_var(REDUCED_MOTION_ENV, "1") };
+            Self(previous)
+        }
+    }
+
+    impl Drop for ReducedMotionEnvRestore {
+        fn drop(&mut self) {
+            match self.0.take() {
+                // SAFETY: same single-writer discipline as pin_enabled.
+                Some(previous) => unsafe { std::env::set_var(REDUCED_MOTION_ENV, previous) },
+                None => unsafe { std::env::remove_var(REDUCED_MOTION_ENV) },
+            }
+        }
+    }
+
+    #[test]
+    fn reduced_motion_env_pin_enables_instant_transitions() {
+        // Write side of the env lock: no sibling App::new() may construct
+        // (and read the variable) inside the mutation window below.
+        let _env_write = REDUCED_MOTION_ENV_RW
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = {
+            let _env = ReducedMotionEnvRestore::pin_enabled();
+            // Construct inside the window: the pin must be read ONCE here.
+            App::with_repository(ProgressRepository::with_path(
+                dir.path().join("progress.json"),
+            ))
+            // `_env` drops here — the env is restored before any assertion.
+        };
+        drop(_env_write);
+
+        assert!(app.reduced_motion, "the env pin must enable reduced motion");
+        assert_eq!(app.current_view, CurrentView::MainMenu);
+
+        // Confirm: normally starts a Descend; reduced motion must land
+        // docked instantly, still on the galaxy map.
+        app.confirm_planet();
+        assert!(app.ship.is_idle(), "descend must finish immediately");
+        assert!(app.is_docked(), "an instant descend must land docked");
+        assert_eq!(app.current_view, CurrentView::MainMenu);
+
+        // Travel: normally a multi-frame flight toward the neighbour;
+        // reduced motion must park the ship idle at the target at once.
+        app.move_planet_right();
+        assert!(app.ship.is_idle(), "travel must finish immediately");
+        assert!((app.ship.position() - 1.0).abs() < 1e-5);
+        assert!(!app.is_docked(), "a travel must lift the dock");
     }
 
     #[test]
@@ -948,6 +1079,26 @@ mod tests {
         app.current_view = CurrentView::Practice;
         assert_eq!(app.poll_interval(), Duration::from_millis(50));
         app.current_view = CurrentView::PlanetLessons;
+        assert_eq!(app.poll_interval(), Duration::from_millis(50));
+    }
+
+    #[test]
+    fn reduced_motion_poll_interval_is_50ms() {
+        // Reduced motion short-circuits the cadence before BOTH fast-path
+        // conditions (ship animating, MainMenu): nothing can animate, so the
+        // slow poll must win even mid-flight on the map.
+        let mut app = App::new();
+        app.user_progress = UserProgress::default();
+        app.reduced_motion = true;
+        app.current_view = CurrentView::MainMenu;
+        // Start a flight directly on the ship, bypassing App navigation
+        // (which would settle it instantly under reduced motion). Snap
+        // first: App::new() may load saved progress that already parks the
+        // ship at 3, and travel_to(3) would no-op.
+        app.ship.snap_to(0);
+        app.ship.travel_to(3);
+        assert!(!app.ship.is_idle());
+
         assert_eq!(app.poll_interval(), Duration::from_millis(50));
     }
 

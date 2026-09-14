@@ -249,11 +249,17 @@ fn render_main_menu(f: &mut Frame, app: &App) {
 
         let (glyph, color, badge) = planet_style(tp.status);
         let is_selected = i == app.selected_planet_index;
-        let frame = planet_frame_index(
-            app.ship.total_elapsed(),
-            planet_frame_period(app.is_docked() && is_selected),
-            PLANET_FRAME_COUNT,
-        );
+        // D10: reduced motion pins the ambient frame clock at frame 0;
+        // full mode cycles with the ship's monotonic mission clock.
+        let frame = if app.reduced_motion {
+            0
+        } else {
+            planet_frame_index(
+                app.ship.total_elapsed(),
+                planet_frame_period(app.is_docked() && is_selected),
+                PLANET_FRAME_COUNT,
+            )
+        };
         let text_style = if tp.status == PlanetStatus::Unexplored {
             Style::default().fg(Theme::MUTED)
         } else {
@@ -406,7 +412,13 @@ fn planet_frame_period(docked_at_planet: bool) -> Duration {
 
 fn render_ship_sprite(f: &mut Frame, map_area: Rect, planet_rects: &[Rect], app: &App) {
     let gutter = ship_gutter(map_area);
-    let frame_idx = app.ship.frame_index();
+    // D10: reduced motion pins the thruster flicker at frame 0; full mode
+    // cycles with the 120ms flicker clock.
+    let frame_idx = if app.reduced_motion {
+        0
+    } else {
+        app.ship.frame_index()
+    };
     let frame = &AsciiArt::SHIP_FRAMES[frame_idx];
     let sprite_h = frame.len() as u16;
     let frame_w = AsciiArt::SHIP_FRAME_WIDTH as u16;
@@ -1168,6 +1180,109 @@ mod tests {
                 "tier {i} sprite lane must change after one idle period"
             );
         }
+    }
+
+    #[test]
+    fn reduced_motion_planet_frame_pinned_to_zero() {
+        // Inverse of `mainmenu_planet_sprite_frame_changes_over_time`: the
+        // same +PLANET_IDLE_PERIOD advance (which flips every sprite to
+        // frame 1 in full mode) must leave every lane byte-identical when
+        // reduced motion pins the frame clock.
+        let mut app = App::new();
+        app.user_progress = UserProgress::default();
+        app.selected_planet_index = 0;
+        app.ship.snap_to(0); // park idle in the gutter, lanes uncovered
+        app.reduced_motion = true;
+
+        let draw = |app: &App| {
+            let backend = TestBackend::new(120, 40);
+            let mut terminal = Terminal::new(backend).unwrap();
+            terminal.draw(|f| render(f, app)).unwrap();
+            terminal.backend().buffer().clone()
+        };
+
+        let before = draw(&app);
+        app.ship.advance(PLANET_IDLE_PERIOD);
+        let after = draw(&app);
+
+        let map = map_body_area(Rect::new(0, 0, 120, 40));
+        for (i, card) in planet_layout(map, 0).iter().enumerate() {
+            if card.width == 0 || card.height == 0 {
+                continue; // off-window planet: no sprite lane on screen
+            }
+            assert_eq!(
+                rect_symbols(&before, sprite_lane(*card)),
+                rect_symbols(&after, sprite_lane(*card)),
+                "tier {i} sprite lane must stay frozen at frame 0"
+            );
+        }
+    }
+
+    #[test]
+    fn reduced_motion_ship_flicker_pinned_to_frame_zero() {
+        // +120ms flips ONLY the thruster flicker (120ms << 800ms idle
+        // period, so no planet frame can move). Under reduced motion the
+        // gutter must stay identical; a full-mode companion renders the
+        // same delta and MUST flicker, proving the setup exercises the
+        // sprite clock (no trivially-green equality).
+        let build = |reduced: bool| {
+            let mut app = App::new();
+            app.user_progress = UserProgress::default();
+            app.selected_planet_index = 0;
+            app.ship.snap_to(0);
+            app.reduced_motion = reduced;
+            app
+        };
+        let gutter_symbols = |app: &App| {
+            let backend = TestBackend::new(120, 40);
+            let mut terminal = Terminal::new(backend).unwrap();
+            terminal.draw(|f| render(f, app)).unwrap();
+            let map = map_body_area(Rect::new(0, 0, 120, 40));
+            rect_symbols(terminal.backend().buffer(), ship_gutter(map))
+        };
+
+        // Full mode: the thruster flicker visibly changes the gutter.
+        let mut full = build(false);
+        let before = gutter_symbols(&full);
+        full.ship.advance(Duration::from_millis(120));
+        let after = gutter_symbols(&full);
+        assert_ne!(before, after, "full mode must flicker at +120ms");
+
+        // Reduced mode: same delta, frozen gutter.
+        let mut reduced = build(true);
+        let pinned_before = gutter_symbols(&reduced);
+        reduced.ship.advance(Duration::from_millis(120));
+        let pinned_after = gutter_symbols(&reduced);
+        assert_eq!(
+            pinned_before, pinned_after,
+            "reduced motion must pin the ship sprite to frame 0"
+        );
+    }
+
+    #[test]
+    fn reduced_motion_buffers_identical_over_time() {
+        // Whole-screen freeze: at t=0 vs t=+2s a full-mode render flips
+        // planet frames (2s spans 2.5 idle periods) and the thruster
+        // flicker (~16 cycles); reduced motion must render the exact same
+        // buffer, proving no ambient animation leaks through anywhere.
+        let mut app = App::new();
+        app.user_progress = UserProgress::default();
+        app.selected_planet_index = 0;
+        app.ship.snap_to(0);
+        app.reduced_motion = true;
+
+        let draw = |app: &App| {
+            let backend = TestBackend::new(120, 40);
+            let mut terminal = Terminal::new(backend).unwrap();
+            terminal.draw(|f| render(f, app)).unwrap();
+            terminal.backend().buffer().clone()
+        };
+
+        let before = draw(&app);
+        app.ship.advance(Duration::from_secs(2));
+        let after = draw(&app);
+
+        assert_eq!(before, after, "buffers must be identical across 2s");
     }
 
     #[test]
