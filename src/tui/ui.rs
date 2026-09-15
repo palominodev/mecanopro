@@ -863,7 +863,6 @@ fn session_history_line(record: &SessionRecord) -> Line<'static> {
 mod tests {
     use super::*;
     use crate::core::model::{PlanetStatus, SessionKind, SessionRecord, SessionSummary, UserProgress};
-    use crate::tui::animation::PLANET_IDLE_PERIOD;
     use crate::tui::planet_layout::{planet_at, PLANET_CARD_WIDTH, SHIP_GUTTER_HEIGHT};
     use crate::tui::planets::RAMP;
     use ratatui::{backend::TestBackend, Terminal};
@@ -1316,7 +1315,10 @@ mod tests {
         };
 
         let before = draw(&app);
-        app.ship.advance(PLANET_IDLE_PERIOD);
+        // 1600ms mirrors the rotation test; under reduced motion (D10) the
+        // amount is arbitrary — every advance must leave the spheres pinned
+        // at the t=0 phase.
+        app.ship.advance(Duration::from_millis(1600));
         let after = draw(&app);
 
         let map = map_body_area(Rect::new(0, 0, 120, 40));
@@ -1339,8 +1341,8 @@ mod tests {
 
     #[test]
     fn reduced_motion_ship_flicker_pinned_to_frame_zero() {
-        // +120ms flips ONLY the thruster flicker (120ms << 800ms idle
-        // period, so no planet frame can move). Under reduced motion the
+        // +120ms flips ONLY the thruster flicker in the gutter (the spheres
+        // are D10-frozen in the reduced render). Under reduced motion the
         // gutter must stay identical; a full-mode companion renders the
         // same delta and MUST flicker, proving the setup exercises the
         // sprite clock (no trivially-green equality).
@@ -1380,10 +1382,11 @@ mod tests {
 
     #[test]
     fn reduced_motion_buffers_identical_over_time() {
-        // Whole-screen freeze: at t=0 vs t=+2s a full-mode render flips
-        // planet frames (2s spans 2.5 idle periods) and the thruster
-        // flicker (~16 cycles); reduced motion must render the exact same
-        // buffer, proving no ambient animation leaks through anywhere.
+        // Whole-screen freeze: at t=0 vs t=+2s a full-mode render rotates
+        // every sphere (2s is a nonzero fraction of each tier's
+        // 2400–8000ms period) and flips the thruster flicker (~16 cycles);
+        // reduced motion must render the exact same buffer, proving no
+        // ambient animation leaks through anywhere.
         let mut app = App::new();
         app.user_progress = UserProgress::default();
         app.selected_planet_index = 0;

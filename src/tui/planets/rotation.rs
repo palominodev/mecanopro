@@ -1,9 +1,9 @@
 //! Planet rotation phase — the pure time→angle mapping for spinning planets.
 //!
-//! Mirrors the defensive style of `planet_frame_index` in
-//! `crate::tui::animation`: `Duration`-driven, integer-millisecond modulo so
-//! periodicity is exact, and degenerate inputs collapse to a frozen phase
-//! `0.0` instead of dividing by zero.
+//! Defensive `Duration`-driven style in the spirit of
+//! `crate::tui::animation`: integer-millisecond modulo so periodicity is
+//! exact, and degenerate inputs collapse to a frozen phase `0.0` instead of
+//! dividing by zero.
 
 use std::time::Duration;
 
