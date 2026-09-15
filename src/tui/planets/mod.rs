@@ -6,11 +6,15 @@
 //! (a later slice) is the only place allowed to touch the terminal buffer.
 
 pub mod config;
+pub mod lighting;
 pub mod palette;
 pub mod rotation;
 pub mod sphere;
 
-pub use config::{Archetype, PLANET_CONFIGS, PlanetConfig};
+pub use config::{Archetype, PlanetConfig, PLANET_CONFIGS};
+pub use lighting::{
+    is_rim, lambert, lit_step, ramp_step, sun_az_el, sun_for_status, sun_from_az_el, SunDir, RAMP,
+};
 pub use palette::{Palette, Rgb, TIER_PALETTES};
 pub use rotation::rotation_phase;
 pub use sphere::{sample_sphere, SphereSample, Vec3};
