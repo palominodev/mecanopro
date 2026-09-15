@@ -10,6 +10,7 @@ pub use dictation_area::DictationArea;
 pub use dictation_summary::DictationSummaryModal;
 pub use keyboard::KeyboardVisualizer;
 pub use planet_sphere::render_map_card;
+pub use planet_sphere::render_observatory;
 pub use stats_bar::StatsBar;
 pub use summary::SummaryModal;
 pub use typing_area::TypingArea;

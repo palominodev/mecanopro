@@ -227,6 +227,11 @@ impl EventHandler {
                     _ => {}
                 }
             }
+
+            // Placeholder arm: the observatory keymap (Enter -> lessons,
+            // Esc -> back to the map) arrives with the confirm-flow flip;
+            // until then no key acts on the view.
+            CurrentView::Observatory => {}
         }
     }
 }

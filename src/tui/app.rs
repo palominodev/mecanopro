@@ -46,6 +46,10 @@ pub enum CurrentView {
     Dictation,
     DictationSummary,
     PlanetLessons,
+    /// Docked-planet observatory: the large ray-cast sphere view opened
+    /// by confirming a docked ship (flow flip lands with the observatory
+    /// change; until then only tests reach this view).
+    Observatory,
 }
 
 pub struct App {
@@ -175,15 +179,19 @@ impl App {
         }
     }
 
-    /// Event-poll interval: fast (16ms, ~60fps) while the ship animates or
+    /// Event-poll interval: fast (16ms, ~60fps) while the ship animates,
     /// while the galaxy map is on screen (it always animates — ambient
-    /// planet frames), slow (50ms) elsewhere to avoid burning CPU. Reduced
-    /// motion (D10) short-circuits to the slow cadence: nothing animates,
-    /// so nothing justifies the fast poll.
+    /// planet frames), or while the observatory is on screen (the docked
+    /// planet spins and its moon orbits); slow (50ms) elsewhere to avoid
+    /// burning CPU. Reduced motion (D10) short-circuits to the slow
+    /// cadence: nothing animates, so nothing justifies the fast poll.
     pub fn poll_interval(&self) -> Duration {
         if self.reduced_motion {
             Duration::from_millis(50)
-        } else if !self.ship.is_idle() || self.current_view == CurrentView::MainMenu {
+        } else if !self.ship.is_idle()
+            || self.current_view == CurrentView::MainMenu
+            || self.current_view == CurrentView::Observatory
+        {
             Duration::from_millis(16)
         } else {
             Duration::from_millis(50)
@@ -1057,6 +1065,23 @@ mod tests {
         assert!(app.ship.is_idle());
         assert_eq!(app.current_view, CurrentView::MainMenu);
         assert_eq!(app.poll_interval(), Duration::from_millis(16));
+    }
+
+    #[test]
+    fn observatory_poll_interval_is_16ms_while_it_animates() {
+        let mut app = App::new();
+        app.user_progress = UserProgress::default();
+        app.current_view = CurrentView::Observatory;
+
+        // The observatory always animates (planet spin, moon orbit), so it
+        // polls at the fast cadence even with an idle ship.
+        assert!(app.ship.is_idle());
+        assert_eq!(app.poll_interval(), Duration::from_millis(16));
+
+        // D10 still wins over the view: nothing animates under reduced
+        // motion, so the slow cadence applies.
+        app.reduced_motion = true;
+        assert_eq!(app.poll_interval(), Duration::from_millis(50));
     }
 
     #[test]

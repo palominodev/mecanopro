@@ -5,7 +5,7 @@ use crate::tui::app::{App, CurrentView};
 use crate::tui::ascii::AsciiArt;
 use crate::tui::components::{
     DictationArea, DictationSummaryModal, KeyboardVisualizer, StatsBar, SummaryModal, TypingArea,
-    render_map_card,
+    render_map_card, render_observatory,
 };
 use crate::tui::planet_layout::{
     MapMode, MenuRow, band_viewport_start, display_index_of, info_column, map_mode, planet_layout,
@@ -46,6 +46,7 @@ pub fn render(f: &mut Frame, app: &App) {
         CurrentView::Stats => render_stats(f, app),
         CurrentView::History => render_history(f, app),
         CurrentView::PlanetLessons => render_planet_lessons(f, app),
+        CurrentView::Observatory => render_observatory_view(f, app),
         CurrentView::Dictation => render_dictation(f, app),
         CurrentView::DictationSummary => {
             render_dictation(f, app);
@@ -58,6 +59,27 @@ pub fn render(f: &mut Frame, app: &App) {
                 DictationSummaryModal::render(f, f.area(), metrics, replay_count);
             }
         }
+    }
+}
+
+/// Full-screen docked-planet view ([`CurrentView::Observatory`]): the
+/// large ray-cast sphere with rings, moon, and telemetry HUD, rendered
+/// for the currently selected planet. Opened by confirming a docked
+/// ship (the confirm-flow flip lands with the observatory change;
+/// until then only tests reach this view).
+fn render_observatory_view(f: &mut Frame, app: &App) {
+    let tier_idx = app.selected_planet_index;
+    let tier_progress = Curriculum::all_tier_progress(&app.user_progress);
+    if let Some(tp) = tier_progress.get(tier_idx) {
+        render_observatory(
+            f,
+            f.area(),
+            tier_idx,
+            tp.tier.planet_name(),
+            tp.status,
+            app.ship.total_elapsed(),
+            app.reduced_motion,
+        );
     }
 }
 
@@ -1755,6 +1777,60 @@ mod tests {
                 "80x24 card {i} lane must paint sphere ramp glyphs: '{lane}'"
             );
         }
+    }
+
+    #[test]
+    fn observatory_glyphs_stay_out_of_map_and_summary_renders() {
+        // Dock-only invariant (approval guard): the observatory's ring,
+        // moon, and HUD glyphs may never leak into map-only or summary
+        // renders. Green before AND after the observatory view wiring,
+        // so the wiring can never silently regress it.
+        let mut app = App::new();
+        app.user_progress = UserProgress::default();
+        app.selected_planet_index = 0;
+
+        let map = render_to_string(&app, 100, 24);
+        assert!(!map.contains('≡'), "ring glyphs must stay dock-only");
+        assert!(!map.contains('☾'), "moon glyphs must stay dock-only");
+        assert!(
+            !map.contains("OBSERVATORIO"),
+            "HUD labels must stay dock-only"
+        );
+
+        app.start_practice(Curriculum::all_lessons()[0].clone());
+        app.current_view = CurrentView::Summary;
+        let summary = render_to_string(&app, 100, 24);
+        assert!(!summary.contains('≡'), "ring glyphs must stay dock-only");
+        assert!(!summary.contains('☾'), "moon glyphs must stay dock-only");
+        assert!(
+            !summary.contains("OBSERVATORIO"),
+            "HUD labels must stay dock-only"
+        );
+    }
+
+    #[test]
+    fn observatory_view_renders_the_dock_frame() {
+        // Full wiring: an App parked on CurrentView::Observatory must
+        // render the docked planet — rings, moon, and HUD — through the
+        // shared render() dispatch.
+        let mut app = App::new();
+        app.user_progress = UserProgress::default();
+        app.selected_planet_index = 0;
+        app.current_view = CurrentView::Observatory;
+
+        let rendered = render_to_string(&app, 100, 24);
+
+        assert!(rendered.contains('≡'), "dock frame must show ring glyphs");
+        assert!(rendered.contains('☾'), "dock frame must show the moon");
+        assert!(
+            rendered.contains("OBSERVATORIO"),
+            "dock frame must show the HUD title"
+        );
+        // Telemetry reflects the selected planet: tier 1 CIMIENTOS.
+        assert!(
+            rendered.contains("CIMIENTOS"),
+            "HUD must name the selected planet"
+        );
     }
 
     #[test]
