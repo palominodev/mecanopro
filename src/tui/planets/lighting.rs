@@ -9,7 +9,8 @@
 
 use crate::core::model::PlanetStatus;
 
-use super::sphere::Vec3;
+use super::config::PlanetConfig;
+use super::sphere::{sample_sphere, Vec3};
 
 /// A sun direction: a unit vector in view space (see module docs).
 pub type SunDir = Vec3;
@@ -69,12 +70,69 @@ pub fn lit_step(lambert: f32, r2: f32) -> u8 {
     if is_rim(r2) { base + 1 } else { base }.min(4)
 }
 
+/// One cell of a shaded planet disc: `step` is the ramp step (`0..=4`) or
+/// `None` for an off-disc blank; `rim` marks limb cells whose glow was
+/// applied (the observatory may tint them).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ShadedCell {
+    pub step: Option<u8>,
+    pub rim: bool,
+}
+
+impl ShadedCell {
+    /// Blank off-disc cell.
+    pub const BLANK: Self = Self {
+        step: None,
+        rim: false,
+    };
+}
+
+/// Shades a whole planet disc into `out`, row-major over a
+/// `diameter × diameter` grid (extra buffer capacity is left untouched),
+/// and returns the number of disc cells hit.
+///
+/// Composition of this slice: per-cell ray-cast plus status lighting.
+/// The surface term (archetype noise) arrives in a later slice, so for
+/// now `phase` and the config's tilt only position the longitude/latitude
+/// frame the surface will sample. Zero heap allocation: caller-provided
+/// buffer, plain data cells, no formatting.
+pub fn shade_disc(
+    cfg: &PlanetConfig,
+    status: PlanetStatus,
+    phase: f32,
+    diameter: u16,
+    out: &mut [ShadedCell],
+) -> usize {
+    let sun = sun_for_status(status);
+    let mut hits = 0usize;
+    if diameter == 0 {
+        return hits;
+    }
+    for (row, line) in out.chunks_exact_mut(diameter as usize).enumerate() {
+        for (col, cell) in line.iter_mut().enumerate() {
+            *cell = match sample_sphere(col as u16, row as u16, diameter, cfg.tilt_deg, phase) {
+                None => ShadedCell::BLANK,
+                Some(sample) => {
+                    hits += 1;
+                    ShadedCell {
+                        step: Some(lit_step(lambert(sample.normal, sun), sample.r2)),
+                        rim: is_rim(sample.r2),
+                    }
+                }
+            };
+        }
+    }
+    hits
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        is_rim, lambert, lit_step, ramp_step, sun_az_el, sun_for_status, sun_from_az_el, RAMP,
+        is_rim, lambert, lit_step, ramp_step, shade_disc, sun_az_el, sun_for_status,
+        sun_from_az_el, ShadedCell, RAMP,
     };
     use crate::core::model::PlanetStatus;
+    use crate::tui::planets::config::PLANET_CONFIGS;
 
     use super::super::sphere::{sample_sphere, Vec3};
 
@@ -264,5 +322,149 @@ mod tests {
                 "ramp must be monotone in Lambert ({left} vs {right})"
             );
         }
+    }
+
+    #[test]
+    fn test_shade_disc_fills_row_major_matching_the_composition() {
+        // InProgress (az 90°) puts the sun on the horizontal axis, so the
+        // lit grid is transpose-ASYMMETRIC — only then does matching
+        // `out[row * d + col]` against `sample_sphere(col, row, …)` prove
+        // row-major rather than column-major fill. (The diagonal az-135°
+        // Conquered sun is transpose-symmetric and cannot prove it.)
+        let diameter = 7u16;
+        let cfg = PLANET_CONFIGS[3];
+        let mut out = [ShadedCell::BLANK; 49];
+        let hits = shade_disc(&cfg, PlanetStatus::InProgress, 0.25, diameter, &mut out);
+        assert_eq!(hits, 37, "7×7 disc cell count per design");
+        let sun = sun_for_status(PlanetStatus::InProgress);
+        let mut asymmetric = 0usize;
+        for row in 0..diameter {
+            for col in 0..diameter {
+                let index = row as usize * diameter as usize + col as usize;
+                let expected = match sample_sphere(col, row, diameter, cfg.tilt_deg, 0.25) {
+                    None => ShadedCell::BLANK,
+                    Some(sample) => ShadedCell {
+                        step: Some(lit_step(lambert(sample.normal, sun), sample.r2)),
+                        rim: is_rim(sample.r2),
+                    },
+                };
+                assert_eq!(
+                    out[index], expected,
+                    "cell ({row},{col}) must match the ray-cast + lighting composition"
+                );
+                if out[index] != out[col as usize * diameter as usize + row as usize] {
+                    asymmetric += 1;
+                }
+            }
+        }
+        assert!(
+            asymmetric > 0,
+            "grid must be genuinely asymmetric so row-major is provable"
+        );
+    }
+
+    #[test]
+    fn test_shade_disc_counts_disc_cells_across_diameters() {
+        // Hand-counted hits per diameter (cells with r2 <= 1).
+        for (diameter, expected_hits) in [(7u16, 37usize), (9, 69), (21, 349)] {
+            let mut out = vec![ShadedCell::BLANK; diameter as usize * diameter as usize];
+            let hits = shade_disc(
+                &PLANET_CONFIGS[6],
+                PlanetStatus::Unexplored,
+                0.0,
+                diameter,
+                &mut out,
+            );
+            assert_eq!(hits, expected_hits, "diameter {diameter} disc cell count");
+        }
+        // Degenerate zero-diameter disc is defensively empty, not a panic.
+        let mut empty: [ShadedCell; 0] = [];
+        assert_eq!(
+            shade_disc(
+                &PLANET_CONFIGS[0],
+                PlanetStatus::Current,
+                0.0,
+                0,
+                &mut empty
+            ),
+            0,
+            "zero diameter shades nothing"
+        );
+    }
+
+    #[test]
+    fn test_shade_disc_relights_when_status_changes() {
+        let mut day = [ShadedCell::BLANK; 49];
+        let mut night = [ShadedCell::BLANK; 49];
+        shade_disc(
+            &PLANET_CONFIGS[2],
+            PlanetStatus::Conquered,
+            0.4,
+            7,
+            &mut day,
+        );
+        shade_disc(
+            &PLANET_CONFIGS[2],
+            PlanetStatus::Unexplored,
+            0.4,
+            7,
+            &mut night,
+        );
+        let day_steps: Vec<u8> = day.iter().filter_map(|cell| cell.step).collect();
+        let night_steps: Vec<u8> = night.iter().filter_map(|cell| cell.step).collect();
+        assert_eq!(day_steps.len(), night_steps.len(), "same silhouette");
+        assert_ne!(day_steps, night_steps, "status must drive relighting");
+        let day_max = *day_steps.iter().max().unwrap();
+        let night_max = *night_steps.iter().max().unwrap();
+        assert!(
+            day_max > night_max,
+            "conquered day glyphs outshine the night ({day_max} vs {night_max})"
+        );
+    }
+
+    /// The map renders 7 planets per tick, so `shade_disc` must not touch
+    /// the allocator. A forwarding global allocator watches only this
+    /// thread while the calls run (const-init thread local: enabling the
+    /// watch cannot itself allocate; parallel test threads stay invisible).
+    #[test]
+    fn test_shade_disc_allocates_nothing_on_the_hot_path() {
+        use std::alloc::{GlobalAlloc, Layout, System};
+        use std::cell::Cell;
+        use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
+
+        static WATCHED_ALLOCS: AtomicUsize = AtomicUsize::new(0);
+        thread_local! {
+            static WATCHING: Cell<bool> = const { Cell::new(false) };
+        }
+        struct WatchingSystem;
+        unsafe impl GlobalAlloc for WatchingSystem {
+            unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+                if WATCHING.with(Cell::get) {
+                    WATCHED_ALLOCS.fetch_add(1, Relaxed);
+                }
+                unsafe { System.alloc(layout) }
+            }
+            unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+                unsafe { System.dealloc(ptr, layout) }
+            }
+        }
+        #[global_allocator]
+        static ALLOCATOR: WatchingSystem = WatchingSystem;
+
+        // Touch the thread local before arming it (defensive: no lazy
+        // allocation inside the watched window).
+        WATCHING.with(|watching| watching.set(false));
+        let mut out = [ShadedCell::BLANK; 49];
+        WATCHING.with(|watching| watching.set(true));
+        let first = shade_disc(&PLANET_CONFIGS[0], PlanetStatus::Current, 0.5, 7, &mut out);
+        // Reusing the same buffer also proves no hidden state between calls.
+        let second = shade_disc(&PLANET_CONFIGS[0], PlanetStatus::Current, 0.5, 7, &mut out);
+        WATCHING.with(|watching| watching.set(false));
+        assert_eq!(first + second, 74, "both passes shade the full disc");
+        assert_eq!(
+            WATCHED_ALLOCS.load(Relaxed),
+            0,
+            "shade_disc must not allocate on the hot path"
+        );
     }
 }

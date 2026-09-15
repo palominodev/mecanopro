@@ -13,7 +13,8 @@ pub mod sphere;
 
 pub use config::{Archetype, PlanetConfig, PLANET_CONFIGS};
 pub use lighting::{
-    is_rim, lambert, lit_step, ramp_step, sun_az_el, sun_for_status, sun_from_az_el, SunDir, RAMP,
+    is_rim, lambert, lit_step, ramp_step, shade_disc, sun_az_el, sun_for_status, sun_from_az_el,
+    ShadedCell, SunDir, RAMP,
 };
 pub use palette::{Palette, Rgb, TIER_PALETTES};
 pub use rotation::rotation_phase;
