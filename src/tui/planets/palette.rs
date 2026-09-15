@@ -123,11 +123,11 @@ mod tests {
 
     #[test]
     fn test_seven_tier_palettes_are_pairwise_distinct() {
-        for i in 0..TIER_PALETTES.len() {
-            for j in (i + 1)..TIER_PALETTES.len() {
+        for (i, left) in TIER_PALETTES.iter().enumerate() {
+            for (j, right) in TIER_PALETTES.iter().enumerate().skip(i + 1) {
                 assert_ne!(
-                    TIER_PALETTES[i],
-                    TIER_PALETTES[j],
+                    left,
+                    right,
                     "palettes for tiers {} and {} must differ",
                     i + 1,
                     j + 1
@@ -138,11 +138,11 @@ mod tests {
 
     #[test]
     fn test_primary_colors_are_pairwise_distinct() {
-        for i in 0..TIER_PALETTES.len() {
-            for j in (i + 1)..TIER_PALETTES.len() {
+        for (i, left) in TIER_PALETTES.iter().enumerate() {
+            for (j, right) in TIER_PALETTES.iter().enumerate().skip(i + 1) {
                 assert_ne!(
-                    TIER_PALETTES[i].primary,
-                    TIER_PALETTES[j].primary,
+                    left.primary,
+                    right.primary,
                     "primary colors of tiers {} and {} must differ",
                     i + 1,
                     j + 1

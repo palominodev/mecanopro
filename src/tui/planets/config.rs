@@ -111,18 +111,17 @@ mod tests {
 
     #[test]
     fn config_distinctness() {
-        for i in 0..PLANET_CONFIGS.len() {
-            for j in (i + 1)..PLANET_CONFIGS.len() {
+        for (i, left) in PLANET_CONFIGS.iter().enumerate() {
+            for (j, right) in PLANET_CONFIGS.iter().enumerate().skip(i + 1) {
                 assert_ne!(
-                    PLANET_CONFIGS[i],
-                    PLANET_CONFIGS[j],
+                    left,
+                    right,
                     "tiers {} and {} must be distinct rows",
                     i + 1,
                     j + 1
                 );
-                let same_palette = PLANET_CONFIGS[i].palette == PLANET_CONFIGS[j].palette;
-                let same_period =
-                    PLANET_CONFIGS[i].rotation_period == PLANET_CONFIGS[j].rotation_period;
+                let same_palette = left.palette == right.palette;
+                let same_period = left.rotation_period == right.rotation_period;
                 assert!(
                     !(same_palette && same_period),
                     "tiers {} and {} share a (palette, period) pair",
