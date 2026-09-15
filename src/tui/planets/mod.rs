@@ -5,6 +5,10 @@
 //! dependency — the purity scan below keeps it that way, and the widget layer
 //! (a later slice) is the only place allowed to touch the terminal buffer.
 
+pub mod rotation;
+
+pub use rotation::rotation_phase;
+
 #[cfg(test)]
 mod tests {
     use std::fs;
