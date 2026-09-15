@@ -50,15 +50,29 @@ impl AsciiArt {
         ["  ▄▲▄  ", " ◄███► ", "  ╹ ╹  "],
     ];
 
-    /// Per-tier planet sprites for the Full-mode galaxy map sprite lane.
+    /// ROLLBACK DATA for the ray-cast planet map (change
+    /// `planetas-diseno-ascii`): per-tier planet sprites for the legacy
+    /// Full-mode sprite lane. No live render path reads this array — the
+    /// map paints ray-cast spheres via
+    /// [`crate::tui::components::render_map_card`] — and the tests in this
+    /// module exist to keep the fallback data sound while it sleeps.
+    ///
     /// Exactly one entry per tier (7 total, in tier order), each carrying
     /// [`PLANET_FRAME_COUNT`] drawn frames of ambient variation (craters
-    /// twinkle, ring swaps, bands shift; the renderer picks the frame via
-    /// `planet_frame_index`). Every frame is exactly 3 rows, at most 12
-    /// columns wide, and every character has Unicode display width 1 (no
-    /// emoji, no double-width codepoints). Sprite rows end in a glyph so
-    /// the anchored rightmost character stays visible even when the parked
-    /// ship overlaps the lane's left columns.
+    /// twinkle, ring swaps, bands shift; the pre-change renderer picked the
+    /// frame via `animation::planet_frame_index`). Every frame is exactly
+    /// 3 rows, at most 12 columns wide, and every character has Unicode
+    /// display width 1 (no emoji, no double-width codepoints). Sprite rows
+    /// end in a glyph so the anchored rightmost character stays visible
+    /// even when the parked ship overlaps the lane's left columns.
+    ///
+    /// Rollback procedure: revert the change's full commit range
+    /// (`git revert 295c256^..<change tip>`, where `295c256^` = `7703c40`
+    /// is the pre-change base). The revert is atomic: it restores the
+    /// ui.rs sprite-lane rendering, the lane-height constants, and the
+    /// `animation.rs` frame helpers together, so the map falls back to
+    /// these sprites without any dangling references. Reverting only a
+    /// partial range is NOT supported — the slices depend on each other.
     pub const PLANET_SPRITES: [[&'static str; PLANET_FRAME_COUNT]; 7] = [
         // Tier1 CIMIENTOS — rocky cratered moon (▄▀ arcs + •◦ craters);
         // frame 1 flips the arcs and swaps the crater glyphs.
