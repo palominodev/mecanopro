@@ -63,10 +63,10 @@ pub fn render(f: &mut Frame, app: &App) {
 }
 
 /// Full-screen docked-planet view ([`CurrentView::Observatory`]): the
-/// large ray-cast sphere with rings, moon, and telemetry HUD, rendered
-/// for the currently selected planet. Opened by confirming a docked
-/// ship (the confirm-flow flip lands with the observatory change;
-/// until then only tests reach this view).
+/// large ray-cast sphere with rings, moon, and telemetry HUD for the
+/// currently selected planet. Opened by confirming a docked ship
+/// (three-step Enter: descend → confirm → observatory); its Enter opens
+/// the lessons, its Esc ascends back to the map.
 fn render_observatory_view(f: &mut Frame, app: &App) {
     let tier_idx = app.selected_planet_index;
     let tier_progress = Curriculum::all_tier_progress(&app.user_progress);
@@ -874,6 +874,25 @@ mod tests {
     /// [`crate::tui::components::render_map_card`].
     fn contains_ramp_glyph(symbols: &str) -> bool {
         RAMP.iter().any(|ramp| symbols.contains(*ramp))
+    }
+
+    /// Counts cells painted with the bright half of the shading ramp
+    /// (steps 2–4, the day-lit cells): the day region a Conquered sun
+    /// lights up on a card's lane.
+    fn count_bright_ramp_cells(buffer: &ratatui::buffer::Buffer, rect: Rect) -> usize {
+        let bright: &[char] = &RAMP[2..];
+        let mut count = 0;
+        for y in rect.y..rect.y + rect.height {
+            for x in rect.x..rect.x + rect.width {
+                if let Some(cell) = buffer.cell(ratatui::layout::Position::new(x, y)) {
+                    let symbol = cell.symbol();
+                    if bright.iter().any(|ramp| symbol.contains(*ramp)) {
+                        count += 1;
+                    }
+                }
+            }
+        }
+        count
     }
 
     /// Renders `app` into a `width x height` `TestBackend` buffer and returns
@@ -1834,6 +1853,80 @@ mod tests {
     }
 
     #[test]
+    fn finished_session_relights_passed_tier_card_conquered() {
+        // Integration (three-step flow + status-as-lighting): pass a
+        // lesson through the real engine, return to the galaxy map, and
+        // the passed tier's card must render Conquered lighting — more
+        // day-lit ramp cells than its pre-session Current look, and
+        // strictly brighter than any still-Unexplored tier's night card.
+        let mut app = App::new();
+        app.user_progress = UserProgress::default();
+        app.selected_planet_index = Tier::Tier1Foundation.index();
+        app.ship.snap_to(app.selected_planet_index);
+        assert_eq!(
+            Curriculum::all_tier_progress(&app.user_progress)[0].status,
+            PlanetStatus::Current,
+            "fixture premise: Tier1 starts as the Current destination"
+        );
+
+        let map = map_body_area(Rect::new(0, 0, 120, 40));
+        let tier1_lane = sprite_lane(planet_layout(map, app.selected_planet_index)[0]);
+        let tier3_lane = sprite_lane(planet_layout(map, app.selected_planet_index)[2]);
+
+        let backend = TestBackend::new(120, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| render(f, &app)).unwrap();
+        let bright_before = count_bright_ramp_cells(terminal.backend().buffer(), tier1_lane);
+        assert!(
+            bright_before >= 1,
+            "fixture premise: the Current dawn crescent must already light some day cells ({bright_before})"
+        );
+
+        // Pass Tier1's first lesson through the real flow: three-step
+        // Enter into the lessons, then a flawless run through the engine.
+        open_lessons_via_three_step_enter(&mut app);
+        let lesson = app
+            .selected_lesson()
+            .expect("a lesson must be selected")
+            .clone();
+        app.start_practice(lesson);
+        let text = app.current_engine.as_ref().unwrap().lesson.text.clone();
+        for ch in text.chars() {
+            app.handle_key_input(ch);
+        }
+        assert!(
+            app.last_session_passed,
+            "fixture premise: the flawless run must pass"
+        );
+        app.return_from_session(); // Summary -> PlanetLessons (lesson row)
+        app.leave_planet_lessons(); // -> MainMenu: the map return
+
+        assert_eq!(
+            Curriculum::all_tier_progress(&app.user_progress)[0].status,
+            PlanetStatus::Conquered,
+            "passing the lesson must conquer Tier1 in the derived statuses"
+        );
+
+        terminal.draw(|f| render(f, &app)).unwrap();
+        let buffer = terminal.backend().buffer();
+        let bright_after = count_bright_ramp_cells(buffer, tier1_lane);
+        let tier3_bright = count_bright_ramp_cells(buffer, tier3_lane);
+
+        assert!(
+            bright_after > bright_before,
+            "the Conquered relight must add day-lit cells to the passed card (before {bright_before}, after {bright_after})"
+        );
+        assert!(
+            bright_after > tier3_bright,
+            "the conquered card must out-shine a still-Unexplored night card ({bright_after} vs {tier3_bright})"
+        );
+        assert!(
+            contains_ramp_glyph(&rect_symbols(buffer, tier1_lane)),
+            "the relit card must keep painting its sphere"
+        );
+    }
+
+    #[test]
     fn test_full_mode_card_shows_progress_cpm_and_badge() {
         // D8 stacked anatomy: the card-wide info lines below the sprite
         // lane restore the per-tier text — status badge and progress·meta
@@ -1960,14 +2053,17 @@ mod tests {
         assert_eq!(lesson_list_area(area), map_body_area(area));
     }
 
-    /// Two-step Enter through the public API (D2): confirm starts the
-    /// descend, finish docks it, the second confirm opens. Leaves the app
-    /// in PlanetLessons — replaces the old `enter_planet_lessons` + settle
+    /// Three-step Enter through the public API (D2): confirm starts the
+    /// descend, finish docks it, the second confirm opens the
+    /// observatory, and the observatory's Enter opens the lessons.
+    /// Leaves the app in PlanetLessons — replaces the old two-step
     /// setup idiom.
-    fn open_lessons_via_two_step_enter(app: &mut App) {
+    fn open_lessons_via_three_step_enter(app: &mut App) {
         app.confirm_planet();
         app.finish_ship_animation();
         app.confirm_planet();
+        assert_eq!(app.current_view, CurrentView::Observatory);
+        app.open_planet_lessons();
         assert_eq!(app.current_view, CurrentView::PlanetLessons);
     }
 
@@ -1976,7 +2072,7 @@ mod tests {
         let mut app = App::new();
         app.user_progress = UserProgress::default();
         app.selected_planet_index = Tier::Tier1Foundation.index();
-        open_lessons_via_two_step_enter(&mut app);
+        open_lessons_via_three_step_enter(&mut app);
 
         let tier1_title = app
             .available_lessons()
@@ -2003,7 +2099,7 @@ mod tests {
         let mut app = App::new();
         app.user_progress = UserProgress::default();
         app.selected_planet_index = Tier::Tier1Foundation.index();
-        open_lessons_via_two_step_enter(&mut app);
+        open_lessons_via_three_step_enter(&mut app);
 
         let rendered = render_to_string(&app, 1, 1);
         assert_eq!(rendered.chars().count(), 1);
@@ -2014,7 +2110,7 @@ mod tests {
         let mut app = App::new();
         app.user_progress = UserProgress::default();
         app.selected_planet_index = Tier::Tier1Foundation.index();
-        open_lessons_via_two_step_enter(&mut app);
+        open_lessons_via_three_step_enter(&mut app);
 
         let section_title = Curriculum::all_sections()
             .into_iter()

@@ -42,9 +42,9 @@ impl EventHandler {
                     if let Some(i) = planet_at(map_body_area(area), pos, app.selected_planet_index)
                     {
                         // D11 click part: clicking the docked (selected)
-                        // card confirms the dock and opens the lessons;
-                        // any other card selects it, snaps the ship there,
-                        // and starts a fresh descend.
+                        // card confirms the dock and opens the
+                        // observatory; any other card selects it, snaps
+                        // the ship there, and starts a fresh descend.
                         if i == app.selected_planet_index && app.is_docked() {
                             app.confirm_planet();
                         } else {
@@ -228,10 +228,15 @@ impl EventHandler {
                 }
             }
 
-            // Placeholder arm: the observatory keymap (Enter -> lessons,
-            // Esc -> back to the map) arrives with the confirm-flow flip;
-            // until then no key acts on the view.
-            CurrentView::Observatory => {}
+            // Observatory keymap: Enter opens the docked planet's lesson
+            // list; Esc ascends back to the galaxy map (the same
+            // leave/ascend semantics PlanetLessons uses). Both exits
+            // lift the dock.
+            CurrentView::Observatory => match key.code {
+                KeyCode::Enter => app.open_planet_lessons(),
+                KeyCode::Esc => app.leave_planet_lessons(),
+                _ => {}
+            },
         }
     }
 }
@@ -260,12 +265,15 @@ mod tests {
         mouse(MouseEventKind::Down(MouseButton::Left), pos)
     }
 
-    /// Two-step Enter (D2): the first press starts the descend; the second
-    /// lands inside the dock window and fast-paths — the handler finishes
-    /// the dock and the same key dispatches `confirm_planet`, opening the
-    /// lessons. Replaces the old `enter_planet_lessons` + settle idiom.
+    /// Three-step Enter (D2): the first press starts the descend; the
+    /// second lands inside the dock window and fast-paths — the handler
+    /// finishes the dock and the same key dispatches `confirm_planet`,
+    /// opening the observatory; the third press opens the lessons from
+    /// the observatory. Replaces the old two-step Enter idiom.
     fn open_selected_planet_lessons(app: &mut App) {
         EventHandler::handle_key(app, key(KeyCode::Enter));
+        EventHandler::handle_key(app, key(KeyCode::Enter));
+        assert_eq!(app.current_view, CurrentView::Observatory);
         EventHandler::handle_key(app, key(KeyCode::Enter));
         assert_eq!(app.current_view, CurrentView::PlanetLessons);
     }
@@ -310,7 +318,7 @@ mod tests {
         let mut app = App::new();
         app.user_progress = UserProgress::default();
         app.selected_planet_index = Tier::Tier1Foundation.index();
-        // Two-step Enter: the click below must dispatch under PlanetLessons
+        // Three-step Enter: the click below must dispatch under PlanetLessons
         // (lesson rows), not MainMenu.
         open_selected_planet_lessons(&mut app);
         let area = Rect::new(0, 0, 120, 40);
@@ -341,7 +349,7 @@ mod tests {
         let mut app = App::new();
         app.user_progress = UserProgress::default();
         app.selected_planet_index = Tier::Tier1Foundation.index();
-        // Two-step Enter: the click below must dispatch under PlanetLessons
+        // Three-step Enter: the click below must dispatch under PlanetLessons
         // (lesson rows), not MainMenu.
         open_selected_planet_lessons(&mut app);
         let area = Rect::new(0, 0, 120, 40);
@@ -478,7 +486,7 @@ mod tests {
         let mut app = App::new();
         app.user_progress = UserProgress::default();
         app.selected_planet_index = Tier::Tier1Foundation.index();
-        // Two-step Enter: the scroll below must act on the lesson list
+        // Three-step Enter: the scroll below must act on the lesson list
         // (MainMenu scroll would move the planet selection).
         open_selected_planet_lessons(&mut app);
         app.move_selection_down();
@@ -497,7 +505,7 @@ mod tests {
         let mut app = App::new();
         app.user_progress = UserProgress::default();
         app.selected_planet_index = Tier::Tier1Foundation.index();
-        // Two-step Enter: the click below must hit the lesson row under
+        // Three-step Enter: the click below must hit the lesson row under
         // PlanetLessons semantics.
         open_selected_planet_lessons(&mut app);
         let before_lesson = app.selected_lesson_index;
@@ -528,7 +536,7 @@ mod tests {
             let mut app = App::new();
             app.user_progress = UserProgress::default();
             app.selected_planet_index = Tier::Tier3SpanishOrthography.index();
-            // Two-step Enter: the leave keys below must act on an actually
+            // Three-step Enter: the leave keys below must act on an actually
             // open PlanetLessons view.
             open_selected_planet_lessons(&mut app);
 
@@ -548,7 +556,7 @@ mod tests {
     }
 
     #[test]
-    fn test_mainmenu_enter_twice_opens_lessons() {
+    fn test_mainmenu_enter_thrice_opens_observatory_then_lessons() {
         let mut app = App::new();
         app.user_progress = UserProgress::default();
         app.selected_planet_index = Tier::Tier2FullAlphabet.index();
@@ -559,10 +567,19 @@ mod tests {
         assert_eq!(app.current_view, CurrentView::MainMenu);
         assert!(app.is_docked(), "the settled descend docks the ship");
 
-        // Second Enter: the docked ship confirms and the lessons open.
+        // Second Enter: the docked ship confirms and the observatory
+        // opens — the dock holds (it is the docked view).
+        EventHandler::handle_key(&mut app, key(KeyCode::Enter));
+
+        assert_eq!(app.current_view, CurrentView::Observatory);
+        assert!(app.is_docked(), "the observatory keeps the dock");
+
+        // Third Enter: the observatory opens the lessons and lifts the
+        // dock.
         EventHandler::handle_key(&mut app, key(KeyCode::Enter));
 
         assert_eq!(app.current_view, CurrentView::PlanetLessons);
+        assert!(!app.is_docked(), "opening the lessons lifts the dock");
         let selected = app.selected_lesson().expect("a lesson must be selected");
         assert_eq!(selected.tier, Tier::Tier2FullAlphabet);
     }
@@ -615,7 +632,8 @@ mod tests {
         app.ship = crate::tui::animation::ShipAnimation::new(app.selected_planet_index);
 
         // Mid-descent (inside the dock window): a single Enter must BOTH
-        // finish the dock and dispatch — one press opens, never swallowed.
+        // finish the dock and dispatch — one press opens the observatory,
+        // never swallowed.
         app.confirm_planet();
         assert_eq!(
             app.ship.phase(),
@@ -626,10 +644,12 @@ mod tests {
 
         assert_eq!(
             app.current_view,
-            CurrentView::PlanetLessons,
-            "Enter inside the dock window must finish the dock and open"
+            CurrentView::Observatory,
+            "Enter inside the dock window must finish the dock and open the observatory"
         );
-        assert!(!app.is_docked(), "opening lifts the dock");
+        assert!(app.is_docked(), "the observatory keeps the dock");
+        EventHandler::handle_key(&mut app, key(KeyCode::Enter));
+        assert!(!app.is_docked(), "opening the lessons lifts the dock");
         let selected = app.selected_lesson().expect("a lesson must be selected");
         assert_eq!(selected.tier, Tier::Tier2FullAlphabet);
     }
@@ -640,7 +660,8 @@ mod tests {
         let map = map_body_area(area);
 
         // Arm 1: clicking the DOCKED (selected) card confirms the dock and
-        // opens its lessons (D11 click part).
+        // opens the observatory (D11 click part); its Enter opens the
+        // lessons.
         let mut app = App::new();
         app.user_progress = UserProgress::default();
         app.selected_planet_index = 0;
@@ -653,6 +674,9 @@ mod tests {
         let pos0 = Position::new(card0.x + card0.width / 2, card0.y + card0.height / 2);
         EventHandler::handle_mouse(&mut app, left_click(pos0), area).unwrap();
 
+        assert_eq!(app.current_view, CurrentView::Observatory);
+        assert!(app.is_docked(), "the observatory keeps the dock");
+        EventHandler::handle_key(&mut app, key(KeyCode::Enter));
         assert_eq!(app.current_view, CurrentView::PlanetLessons);
         let selected = app.selected_lesson().expect("a lesson must be selected");
         assert_eq!(selected.tier, Tier::ALL[0]);
@@ -1061,8 +1085,10 @@ mod tests {
             }
         }
 
-        // Enter is two-step since D2 (dock, then confirm) and cannot ride the
-        // single-key table: first press docks without flipping, second opens.
+        // Enter is three-step since the observatory flip (dock, confirm
+        // into the observatory, then open) and cannot ride the single-key
+        // table: first press docks without flipping, second opens the
+        // observatory, third opens.
         let mut app = App::new();
         app.user_progress = UserProgress::default();
         app.selected_planet_index = 2;
@@ -1076,8 +1102,14 @@ mod tests {
         EventHandler::handle_key(&mut app, key(KeyCode::Enter));
         assert_eq!(
             app.current_view,
+            CurrentView::Observatory,
+            "second Enter confirms the dock and opens the observatory"
+        );
+        EventHandler::handle_key(&mut app, key(KeyCode::Enter));
+        assert_eq!(
+            app.current_view,
             CurrentView::PlanetLessons,
-            "second Enter confirms the dock and opens"
+            "third Enter opens the lessons from the observatory"
         );
     }
 
@@ -1087,7 +1119,7 @@ mod tests {
             let mut app = App::new();
             app.user_progress = UserProgress::default();
             app.selected_planet_index = Tier::Tier1Foundation.index();
-            // Two-step Enter: reach a genuinely open PlanetLessons view.
+            // Three-step Enter: reach a genuinely open PlanetLessons view.
             open_selected_planet_lessons(&mut app);
             app
         }

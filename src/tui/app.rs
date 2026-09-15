@@ -47,8 +47,8 @@ pub enum CurrentView {
     DictationSummary,
     PlanetLessons,
     /// Docked-planet observatory: the large ray-cast sphere view opened
-    /// by confirming a docked ship (flow flip lands with the observatory
-    /// change; until then only tests reach this view).
+    /// by confirming a docked ship. Enter opens the lessons, Esc
+    /// ascends back to the galaxy map.
     Observatory,
 }
 
@@ -58,8 +58,10 @@ pub struct App {
     /// selected planet (maintained by the private settle helper), `false`
     /// everywhere else. NOT derivable from `ship.is_idle()` — idle-at-target
     /// is also the startup and post-travel state. While docked the galaxy
-    /// map keeps rendering and `confirm_planet` opens the lessons instead
-    /// of starting another descend.
+    /// map keeps rendering and `confirm_planet` opens the observatory
+    /// instead of starting another descend; the dock holds through the
+    /// observatory and lifts when its Enter opens the lessons or its Esc
+    /// ascends away.
     pub docked: bool,
     pub repository: ProgressRepository,
     pub user_progress: UserProgress,
@@ -401,13 +403,15 @@ impl App {
         }
     }
 
-    /// Two-step Enter, step one OR step two depending on the dock state
-    /// (D2): not docked → start the descend toward the selected card;
-    /// docked → open the lesson list directly. The view only ever flips
-    /// through this confirm, never as an animation side effect.
+    /// Three-step Enter (D2): the first confirm, made while not docked,
+    /// starts the descend toward the selected card; the second confirm,
+    /// made while docked, opens the observatory (the dock holds — it is
+    /// the docked view); the observatory's Enter then opens the lesson
+    /// list. The view only ever flips through a confirm or the
+    /// observatory's keys, never as an animation side effect.
     pub fn confirm_planet(&mut self) {
         if self.is_docked() {
-            self.open_planet_lessons();
+            self.current_view = CurrentView::Observatory;
         } else {
             self.ship.descend();
             self.settle_instantly_if_reduced();
@@ -425,8 +429,10 @@ impl App {
     /// [`crate::core::model::BestScore`], or the tier's first lesson if all
     /// are passed. The flip is direct (no deferral): this only runs once
     /// the ship is docked, and it ends the dock state — the galaxy map is
-    /// left, so the next arrival starts a fresh descend.
-    fn open_planet_lessons(&mut self) {
+    /// left, so the next arrival starts a fresh descend. Public for the
+    /// observatory's Enter key, which opens the lessons from the docked
+    /// view (the event-layer keymap dispatches it).
+    pub fn open_planet_lessons(&mut self) {
         let tier = self.selected_tier();
         let lessons = self.available_lessons();
         let tier_lessons: Vec<(usize, &Lesson)> = lessons
@@ -1164,11 +1170,14 @@ mod tests {
         app.selected_planet_index = Tier::Tier1Foundation.index();
         app.ship = crate::tui::animation::ShipAnimation::new(app.selected_planet_index);
 
-        // Two-step Enter: dock first, then the second confirm opens.
+        // Three-step Enter: dock first, the second confirm opens the
+        // observatory, and the observatory's Enter opens the lessons.
         app.confirm_planet();
         app.finish_ship_animation();
         assert!(app.is_docked());
         app.confirm_planet();
+        assert_eq!(app.current_view, CurrentView::Observatory);
+        app.open_planet_lessons();
         assert_eq!(app.current_view, CurrentView::PlanetLessons);
 
         app.leave_planet_lessons();
@@ -1300,9 +1309,17 @@ mod tests {
 
     #[test]
     fn docked_lifts_on_open_and_leave_planet_lessons() {
-        // open_planet_lessons: the direct flip ends the dock state.
+        // The docked confirm opens the observatory WITH the dock held
+        // (the observatory is the docked view); open_planet_lessons:
+        // the direct flip ends the dock state.
         let mut app = docked_app();
         app.confirm_planet();
+        assert_eq!(app.current_view, CurrentView::Observatory);
+        assert!(
+            app.is_docked(),
+            "the observatory is the docked view — the dock holds"
+        );
+        app.open_planet_lessons();
         assert_eq!(app.current_view, CurrentView::PlanetLessons);
         assert!(!app.is_docked(), "opening the lessons must lift the dock");
 
@@ -1356,9 +1373,9 @@ mod tests {
         app.advance_animation(crate::tui::animation::DESCEND + Duration::from_millis(1));
         assert_invariant(&app);
 
-        app.confirm_planet(); // open (direct flip)
+        app.confirm_planet(); // docked confirm opens the observatory
         assert_invariant(&app);
-        app.leave_planet_lessons(); // ascend
+        app.leave_planet_lessons(); // observatory Esc ascends
         assert_invariant(&app);
     }
 
