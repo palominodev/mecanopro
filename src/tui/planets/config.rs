@@ -30,65 +30,33 @@ pub struct PlanetConfig {
     pub rotation_period: Duration,
 }
 
+/// Shorthand constructor for the table literal below (period in ms).
+const fn planet(
+    archetype: Archetype,
+    palette: Palette,
+    noise_scale: f32,
+    tilt_deg: f32,
+    rotation_period_ms: u64,
+) -> PlanetConfig {
+    PlanetConfig {
+        archetype,
+        palette,
+        noise_scale,
+        tilt_deg,
+        rotation_period: Duration::from_millis(rotation_period_ms),
+    }
+}
+
 /// The 7 tier configurations, indexed by `Tier::index()`
 /// (CIMIENTOS … MAESTRÍA) per the design's tier parameter table.
 pub const PLANET_CONFIGS: [PlanetConfig; 7] = [
-    // 1 CIMIENTOS — Terra continents (scale 2.5)
-    PlanetConfig {
-        archetype: Archetype::Terra,
-        palette: TIER_PALETTES[0],
-        noise_scale: 2.5,
-        tilt_deg: 10.0,
-        rotation_period: Duration::from_millis(8000),
-    },
-    // 2 ALFABETO — Terra archipelago (scale 6)
-    PlanetConfig {
-        archetype: Archetype::Terra,
-        palette: TIER_PALETTES[1],
-        noise_scale: 6.0,
-        tilt_deg: 15.0,
-        rotation_period: Duration::from_millis(6500),
-    },
-    // 3 ORTOGRAFÍA — Craters, high density
-    PlanetConfig {
-        archetype: Archetype::Craters,
-        palette: TIER_PALETTES[2],
-        noise_scale: 7.5,
-        tilt_deg: 20.0,
-        rotation_period: Duration::from_millis(5500),
-    },
-    // 4 SÍMBOLOS — GasBands, 7 sharp bands
-    PlanetConfig {
-        archetype: Archetype::GasBands,
-        palette: TIER_PALETTES[3],
-        noise_scale: 7.0,
-        tilt_deg: 25.0,
-        rotation_period: Duration::from_millis(4500),
-    },
-    // 5 CADENCIA — GasBands, 5 soft bands
-    PlanetConfig {
-        archetype: Archetype::GasBands,
-        palette: TIER_PALETTES[4],
-        noise_scale: 5.0,
-        tilt_deg: 30.0,
-        rotation_period: Duration::from_millis(3500),
-    },
-    // 6 FLUIDEZ — IceStorm streaks ×1.0
-    PlanetConfig {
-        archetype: Archetype::IceStorm,
-        palette: TIER_PALETTES[5],
-        noise_scale: 1.0,
-        tilt_deg: 35.0,
-        rotation_period: Duration::from_millis(3000),
-    },
-    // 7 MAESTRÍA — IceStorm ×1.6 swirl
-    PlanetConfig {
-        archetype: Archetype::IceStorm,
-        palette: TIER_PALETTES[6],
-        noise_scale: 1.6,
-        tilt_deg: 45.0,
-        rotation_period: Duration::from_millis(2400),
-    },
+    planet(Archetype::Terra, TIER_PALETTES[0], 2.5, 10.0, 8000), // 1 CIMIENTOS continents
+    planet(Archetype::Terra, TIER_PALETTES[1], 6.0, 15.0, 6500), // 2 ALFABETO archipelago
+    planet(Archetype::Craters, TIER_PALETTES[2], 7.5, 20.0, 5500), // 3 ORTOGRAFÍA craters
+    planet(Archetype::GasBands, TIER_PALETTES[3], 7.0, 25.0, 4500), // 4 SÍMBOLOS 7 sharp bands
+    planet(Archetype::GasBands, TIER_PALETTES[4], 5.0, 30.0, 3500), // 5 CADENCIA 5 soft bands
+    planet(Archetype::IceStorm, TIER_PALETTES[5], 1.0, 35.0, 3000), // 6 FLUIDEZ streaks ×1.0
+    planet(Archetype::IceStorm, TIER_PALETTES[6], 1.6, 45.0, 2400), // 7 MAESTRÍA ×1.6 swirl
 ];
 
 #[cfg(test)]

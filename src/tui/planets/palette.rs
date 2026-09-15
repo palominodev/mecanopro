@@ -21,100 +21,25 @@ pub struct Palette {
     pub secondary: Rgb,
 }
 
+/// Shorthand constructors for the table literal below.
+const fn rgb(r: u8, g: u8, b: u8) -> Rgb {
+    Rgb { r, g, b }
+}
+
+const fn palette(primary: Rgb, secondary: Rgb) -> Palette {
+    Palette { primary, secondary }
+}
+
 /// The 7 tier palettes, indexed by `Tier::index()` (CIMIENTOS … MAESTRÍA),
 /// per the design's tier parameter table.
 pub const TIER_PALETTES: [Palette; 7] = [
-    // 1 CIMIENTOS — teal/moss
-    Palette {
-        primary: Rgb {
-            r: 0,
-            g: 128,
-            b: 128,
-        },
-        secondary: Rgb {
-            r: 106,
-            g: 130,
-            b: 62,
-        },
-    },
-    // 2 ALFABETO — azure/sand
-    Palette {
-        primary: Rgb {
-            r: 0,
-            g: 127,
-            b: 255,
-        },
-        secondary: Rgb {
-            r: 216,
-            g: 196,
-            b: 144,
-        },
-    },
-    // 3 ORTOGRAFÍA — rust/amber
-    Palette {
-        primary: Rgb {
-            r: 168,
-            g: 60,
-            b: 18,
-        },
-        secondary: Rgb {
-            r: 226,
-            g: 150,
-            b: 40,
-        },
-    },
-    // 4 SÍMBOLOS — indigo/violet
-    Palette {
-        primary: Rgb {
-            r: 72,
-            g: 0,
-            b: 140,
-        },
-        secondary: Rgb {
-            r: 177,
-            g: 94,
-            b: 226,
-        },
-    },
-    // 5 CADENCIA — amber/gold
-    Palette {
-        primary: Rgb {
-            r: 255,
-            g: 168,
-            b: 32,
-        },
-        secondary: Rgb {
-            r: 255,
-            g: 214,
-            b: 74,
-        },
-    },
-    // 6 FLUIDEZ — deep-blue/white
-    Palette {
-        primary: Rgb {
-            r: 16,
-            g: 42,
-            b: 132,
-        },
-        secondary: Rgb {
-            r: 236,
-            g: 244,
-            b: 255,
-        },
-    },
-    // 7 MAESTRÍA — magenta/gold
-    Palette {
-        primary: Rgb {
-            r: 232,
-            g: 42,
-            b: 182,
-        },
-        secondary: Rgb {
-            r: 255,
-            g: 196,
-            b: 56,
-        },
-    },
+    palette(rgb(0, 128, 128), rgb(106, 130, 62)), // 1 CIMIENTOS teal/moss
+    palette(rgb(0, 127, 255), rgb(216, 196, 144)), // 2 ALFABETO azure/sand
+    palette(rgb(168, 60, 18), rgb(226, 150, 40)), // 3 ORTOGRAFÍA rust/amber
+    palette(rgb(72, 0, 140), rgb(177, 94, 226)),  // 4 SÍMBOLOS indigo/violet
+    palette(rgb(255, 168, 32), rgb(255, 214, 74)), // 5 CADENCIA amber/gold
+    palette(rgb(16, 42, 132), rgb(236, 244, 255)), // 6 FLUIDEZ deep-blue/white
+    palette(rgb(232, 42, 182), rgb(255, 196, 56)), // 7 MAESTRÍA magenta/gold
 ];
 
 #[cfg(test)]
@@ -163,8 +88,8 @@ mod tests {
         }
     }
 
-    /// Compile-time type check: the palette type is a plain value struct,
-    /// constructible and comparable without any rendering crate.
+    /// The palette type is a plain value struct: constructible and
+    /// comparable without any rendering crate.
     #[test]
     fn test_palette_is_a_plain_value_type() {
         let palette = Palette {
