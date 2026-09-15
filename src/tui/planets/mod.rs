@@ -8,10 +8,12 @@
 pub mod config;
 pub mod palette;
 pub mod rotation;
+pub mod sphere;
 
 pub use config::{Archetype, PLANET_CONFIGS, PlanetConfig};
 pub use palette::{Palette, Rgb, TIER_PALETTES};
 pub use rotation::rotation_phase;
+pub use sphere::{sample_sphere, SphereSample, Vec3};
 
 #[cfg(test)]
 mod tests {
