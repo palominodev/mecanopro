@@ -5,9 +5,11 @@
 //! dependency — the purity scan below keeps it that way, and the widget layer
 //! (a later slice) is the only place allowed to touch the terminal buffer.
 
+pub mod config;
 pub mod palette;
 pub mod rotation;
 
+pub use config::{Archetype, PLANET_CONFIGS, PlanetConfig};
 pub use palette::{Palette, Rgb, TIER_PALETTES};
 pub use rotation::rotation_phase;
 
