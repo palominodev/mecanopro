@@ -10,6 +10,7 @@ pub mod lighting;
 pub mod palette;
 pub mod rotation;
 pub mod sphere;
+pub mod surface;
 
 pub use config::{Archetype, PlanetConfig, PLANET_CONFIGS};
 pub use lighting::{
