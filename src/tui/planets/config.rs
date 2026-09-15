@@ -61,7 +61,7 @@ pub const PLANET_CONFIGS: [PlanetConfig; 7] = [
 
 #[cfg(test)]
 mod tests {
-    use super::{Archetype, PLANET_CONFIGS, PlanetConfig};
+    use super::{Archetype, PlanetConfig, PLANET_CONFIGS};
     use crate::tui::planets::palette::TIER_PALETTES;
     use std::time::Duration;
 
