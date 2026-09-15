@@ -19,7 +19,7 @@ pub use lighting::{
 };
 pub use palette::{Palette, Rgb, TIER_PALETTES};
 pub use rotation::rotation_phase;
-pub use sphere::{SphereSample, Vec3, sample_sphere};
+pub use sphere::{CELL_ASPECT, SphereSample, Vec3, disc_cols, sample_sphere};
 pub use surface::surface_step;
 
 #[cfg(test)]

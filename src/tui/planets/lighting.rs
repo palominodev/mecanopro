@@ -101,9 +101,12 @@ impl ShadedCell {
     };
 }
 
-/// Shades a whole planet disc into `out`, row-major over a
-/// `diameter × diameter` grid (extra buffer capacity is left untouched),
-/// and returns the number of disc cells hit.
+/// Shades a whole planet disc into `out`, row-major over a `cols × rows`
+/// grid, and returns the number of disc cells hit. `out` must be at
+/// least `cols * rows` long; any surplus capacity is left untouched
+/// (only the leading `cols * rows` cells are ever written), and a
+/// too-short buffer is defensively treated as an empty disc rather than
+/// panicking.
 ///
 /// Composition: per-cell ray-cast, status lighting, and the archetype
 /// terrain. Each disc cell's ramp step is
@@ -117,17 +120,25 @@ pub fn shade_disc(
     cfg: &PlanetConfig,
     status: PlanetStatus,
     phase: f32,
-    diameter: u16,
+    cols: u16,
+    rows: u16,
     out: &mut [ShadedCell],
 ) -> usize {
     let sun = sun_for_status(status);
     let mut hits = 0usize;
-    if diameter == 0 {
+    if cols == 0 || rows == 0 {
         return hits;
     }
-    for (row, line) in out.chunks_exact_mut(diameter as usize).enumerate() {
+    let cols_usize = cols as usize;
+    let Some(needed) = cols_usize.checked_mul(rows as usize) else {
+        return hits;
+    };
+    let Some(out) = out.get_mut(..needed) else {
+        return hits;
+    };
+    for (row, line) in out.chunks_exact_mut(cols_usize).enumerate() {
         for (col, cell) in line.iter_mut().enumerate() {
-            *cell = match sample_sphere(col as u16, row as u16, diameter, cfg.tilt_deg, phase) {
+            *cell = match sample_sphere(col as u16, row as u16, cols, rows, cfg.tilt_deg, phase) {
                 None => ShadedCell::BLANK,
                 Some(sample) => {
                     hits += 1;
@@ -235,7 +246,7 @@ mod tests {
         let mut total = 0usize;
         for row in 0..21u16 {
             for col in 0..21u16 {
-                if let Some(sample) = sample_sphere(col, row, 21, 25.0, 0.4) {
+                if let Some(sample) = sample_sphere(col, row, 21, 21, 25.0, 0.4) {
                     total += 1;
                     if lambert(sample.normal, sun) > 0.0 {
                         lit += 1;
@@ -402,14 +413,22 @@ mod tests {
         let diameter = 7u16;
         let cfg = PLANET_CONFIGS[3];
         let mut out = [ShadedCell::BLANK; 49];
-        let hits = shade_disc(&cfg, PlanetStatus::InProgress, 0.25, diameter, &mut out);
+        let hits = shade_disc(
+            &cfg,
+            PlanetStatus::InProgress,
+            0.25,
+            diameter,
+            diameter,
+            &mut out,
+        );
         assert_eq!(hits, 37, "7×7 disc cell count per design");
         let sun = sun_for_status(PlanetStatus::InProgress);
         let mut asymmetric = 0usize;
         for row in 0..diameter {
             for col in 0..diameter {
                 let index = row as usize * diameter as usize + col as usize;
-                let expected = match sample_sphere(col, row, diameter, cfg.tilt_deg, 0.25) {
+                let expected = match sample_sphere(col, row, diameter, diameter, cfg.tilt_deg, 0.25)
+                {
                     None => ShadedCell::BLANK,
                     Some(sample) => ShadedCell {
                         step: Some(modulate(
@@ -434,6 +453,55 @@ mod tests {
         );
     }
 
+    /// A non-square `cols x rows` grid (the map-card's round-on-screen
+    /// 13x7 aspect) proves the fill strides by `cols`, not by assuming a
+    /// square buffer, and a sentinel value planted beyond the needed
+    /// `cols * rows` cells proves surplus buffer capacity is left
+    /// untouched.
+    #[test]
+    fn test_shade_disc_fills_cols_by_rows_and_leaves_surplus_untouched() {
+        const SENTINEL: ShadedCell = ShadedCell {
+            step: Some(9),
+            rim: true,
+        };
+        let cfg = PLANET_CONFIGS[3];
+        let (cols, rows) = (13u16, 7u16);
+        let mut out = [SENTINEL; 128];
+        let hits = shade_disc(&cfg, PlanetStatus::InProgress, 0.25, cols, rows, &mut out);
+
+        let sun = sun_for_status(PlanetStatus::InProgress);
+        let mut expected_hits = 0usize;
+        for row in 0..rows {
+            for col in 0..cols {
+                let index = row as usize * cols as usize + col as usize;
+                let expected = match sample_sphere(col, row, cols, rows, cfg.tilt_deg, 0.25) {
+                    None => ShadedCell::BLANK,
+                    Some(sample) => {
+                        expected_hits += 1;
+                        ShadedCell {
+                            step: Some(modulate(
+                                lit_step(lambert(sample.normal, sun), sample.r2),
+                                surface_step(&cfg, sample.lon, sample.lat),
+                            )),
+                            rim: is_rim(sample.r2),
+                        }
+                    }
+                };
+                assert_eq!(
+                    out[index], expected,
+                    "cell ({row},{col}) must match the ray-cast + lighting composition"
+                );
+            }
+        }
+        assert_eq!(hits, expected_hits, "hit count must match the disc cells");
+        for (i, &cell) in out[cols as usize * rows as usize..].iter().enumerate() {
+            assert_eq!(
+                cell, SENTINEL,
+                "surplus cell {i} past cols*rows must stay untouched"
+            );
+        }
+    }
+
     #[test]
     fn test_shade_disc_counts_disc_cells_across_diameters() {
         // Hand-counted hits per diameter (cells with r2 <= 1).
@@ -443,6 +511,7 @@ mod tests {
                 &PLANET_CONFIGS[6],
                 PlanetStatus::Unexplored,
                 0.0,
+                diameter,
                 diameter,
                 &mut out,
             );
@@ -455,6 +524,7 @@ mod tests {
                 &PLANET_CONFIGS[0],
                 PlanetStatus::Current,
                 0.0,
+                0,
                 0,
                 &mut empty
             ),
@@ -472,12 +542,14 @@ mod tests {
             PlanetStatus::Conquered,
             0.4,
             7,
+            7,
             &mut day,
         );
         shade_disc(
             &PLANET_CONFIGS[2],
             PlanetStatus::Unexplored,
             0.4,
+            7,
             7,
             &mut night,
         );
@@ -502,8 +574,8 @@ mod tests {
         let cfg = PLANET_CONFIGS[2];
         let mut first = [ShadedCell::BLANK; 49];
         let mut second = [ShadedCell::BLANK; 49];
-        let first_hits = shade_disc(&cfg, PlanetStatus::InProgress, 0.0, 7, &mut first);
-        let second_hits = shade_disc(&cfg, PlanetStatus::InProgress, 0.5, 7, &mut second);
+        let first_hits = shade_disc(&cfg, PlanetStatus::InProgress, 0.0, 7, 7, &mut first);
+        let second_hits = shade_disc(&cfg, PlanetStatus::InProgress, 0.5, 7, 7, &mut second);
         assert_eq!(first_hits, second_hits, "rotation never reshapes the disc");
         assert_eq!(first_hits, 37, "7×7 disc cell count per design");
         let silhouette: Vec<bool> = first.iter().map(|cell| cell.step.is_some()).collect();
@@ -529,11 +601,11 @@ mod tests {
         let sun = sun_for_status(PlanetStatus::Unexplored);
         for cfg in PLANET_CONFIGS.iter() {
             let mut out = [ShadedCell::BLANK; 49];
-            shade_disc(cfg, PlanetStatus::Unexplored, 0.3, 7, &mut out);
+            shade_disc(cfg, PlanetStatus::Unexplored, 0.3, 7, 7, &mut out);
             let mut checked = 0usize;
             for row in 0..7u16 {
                 for col in 0..7u16 {
-                    let Some(sample) = sample_sphere(col, row, 7, cfg.tilt_deg, 0.3) else {
+                    let Some(sample) = sample_sphere(col, row, 7, 7, cfg.tilt_deg, 0.3) else {
                         continue;
                     };
                     if lit_step(lambert(sample.normal, sun), sample.r2) == 0 {
@@ -586,9 +658,23 @@ mod tests {
         WATCHING.with(|watching| watching.set(false));
         let mut out = [ShadedCell::BLANK; 49];
         WATCHING.with(|watching| watching.set(true));
-        let first = shade_disc(&PLANET_CONFIGS[0], PlanetStatus::Current, 0.5, 7, &mut out);
+        let first = shade_disc(
+            &PLANET_CONFIGS[0],
+            PlanetStatus::Current,
+            0.5,
+            7,
+            7,
+            &mut out,
+        );
         // Reusing the same buffer also proves no hidden state between calls.
-        let second = shade_disc(&PLANET_CONFIGS[0], PlanetStatus::Current, 0.5, 7, &mut out);
+        let second = shade_disc(
+            &PLANET_CONFIGS[0],
+            PlanetStatus::Current,
+            0.5,
+            7,
+            7,
+            &mut out,
+        );
         WATCHING.with(|watching| watching.set(false));
         assert_eq!(first + second, 74, "both passes shade the full disc");
         assert_eq!(
