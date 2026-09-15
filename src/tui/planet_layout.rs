@@ -18,9 +18,9 @@ pub const MIN_FULL_WIDTH: u16 = 46;
 /// as the ship's flight lane.
 pub const SHIP_GUTTER_HEIGHT: u16 = 3;
 /// Height (in rows) of the planet sprite lane: the top rows of each
-/// Full-mode card, matching the 3-row planet sprite frames in
-/// [`crate::tui::ascii::AsciiArt::PLANET_SPRITES`].
-pub const SPRITE_LANE_HEIGHT: u16 = 3;
+/// Full-mode card, sized for the 7-row ray-cast planet disc (diameter 7,
+/// the odd height with a center row the sphere math needs).
+pub const SPRITE_LANE_HEIGHT: u16 = 7;
 /// Number of info lines stacked below the sprite lane in each Full-mode
 /// card (D8 anatomy): marker+name / glyph+badge / progress·meta.
 pub const INFO_LINE_COUNT: u16 = 3;
@@ -755,11 +755,13 @@ mod tests {
     #[test]
     fn test_sprite_lane_info_column_partition() {
         // D8 stacked anatomy: the sprite lane is the top rows of the card,
-        // the info lines sit below it across the full card width.
+        // the info lines sit below it across the full card width. The lane
+        // is 7 rows tall (the ray-cast sphere disc diameter), so a full
+        // card is 10 rows: 7 lane + 3 info.
         let card = Rect::new(0, 0, 14, PLANET_CARD_HEIGHT);
-        assert_eq!(card.height, 6, "D8 card anatomy ≈ 6 rows");
-        assert_eq!(sprite_lane(card), Rect::new(0, 0, 12, 3));
-        assert_eq!(info_column(card), Rect::new(0, 3, 14, 3));
+        assert_eq!(card.height, 10, "D8 card anatomy: 7-row lane + 3 info rows");
+        assert_eq!(sprite_lane(card), Rect::new(0, 0, 12, 7));
+        assert_eq!(info_column(card), Rect::new(0, 7, 14, 3));
         // The two blocks must tile the card exactly: no overlap, no gap.
         assert_eq!(
             sprite_lane(card).y + sprite_lane(card).height,
@@ -773,8 +775,8 @@ mod tests {
 
         // Off-origin cards keep the partition anchored to the card rect.
         let off_card = Rect::new(5, 7, 14, PLANET_CARD_HEIGHT);
-        assert_eq!(sprite_lane(off_card), Rect::new(5, 7, 12, 3));
-        assert_eq!(info_column(off_card), Rect::new(5, 10, 14, 3));
+        assert_eq!(sprite_lane(off_card), Rect::new(5, 7, 12, 7));
+        assert_eq!(info_column(off_card), Rect::new(5, 14, 14, 3));
 
         // Shorter than the lane: the lane clamps, info degrades to a
         // zero-height slice — still no overlap and no gap.
@@ -784,6 +786,17 @@ mod tests {
         assert_eq!(
             sprite_lane(short_card).y + sprite_lane(short_card).height,
             info_column(short_card).y
+        );
+
+        // Mid-height card (taller than the old 3-row lane, shorter than
+        // the 7-row lane): the lane still clamps to the card and the info
+        // slice stays zero-height — the tiling invariant degrades safely.
+        let mid_card = Rect::new(3, 1, 14, 5);
+        assert_eq!(sprite_lane(mid_card), Rect::new(3, 1, 12, 5));
+        assert_eq!(info_column(mid_card), Rect::new(3, 6, 14, 0));
+        assert_eq!(
+            sprite_lane(mid_card).y + sprite_lane(mid_card).height,
+            info_column(mid_card).y
         );
     }
 }

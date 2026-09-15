@@ -1103,6 +1103,80 @@ mod tests {
     }
 
     #[test]
+    fn mainmenu_map_body_shorter_than_thirteen_rows_falls_back_to_compact() {
+        // Full-window heights of 18–21 leave a 9–12 row map body (the
+        // 6+3 header/footer chrome reservation). Those used to reach Full
+        // mode and must now fall back to Compact with the taller lane.
+        // The user-visible tell is the ship sprite: `render_ship_sprite`
+        // runs in Full mode only.
+        let mut app = App::new();
+        app.user_progress = UserProgress::default();
+        app.selected_planet_index = 0;
+        app.ship.snap_to(0);
+
+        // 100×21 → map body 62×12: below the Full threshold → Compact.
+        let compact_map = map_body_area(Rect::new(0, 0, 100, 21));
+        assert_eq!(
+            compact_map.height, 12,
+            "fixture premise: body height after the 6+3 chrome reservation"
+        );
+        assert_eq!(map_mode(compact_map), MapMode::Compact);
+        assert!(
+            !render_to_string(&app, 100, 21).contains("◄███►"),
+            "no ship lane below the 13-row Full threshold"
+        );
+
+        // 100×22 → map body 62×13: one row above the threshold → Full,
+        // with exactly one card band (3 gutter + 10 card rows) fitting.
+        let full_map = map_body_area(Rect::new(0, 0, 100, 22));
+        assert_eq!(full_map.height, 13, "fixture premise: threshold + 1");
+        assert_eq!(map_mode(full_map), MapMode::Full);
+        assert!(
+            render_to_string(&app, 100, 22).contains("◄███►"),
+            "Full mode renders the ship gutter at threshold + 1"
+        );
+    }
+
+    #[test]
+    fn full_mode_sprite_paints_only_the_top_rows_of_the_tall_lane() {
+        // The lane is 7 rows tall for the ray-cast sphere, but the legacy
+        // 3-row PLANET_SPRITES art still paints from the lane's top: the
+        // rows between the sprite and the info column stay blank until
+        // the sphere widget takes over the lane.
+        let mut app = App::new();
+        app.user_progress = UserProgress::default();
+        app.selected_planet_index = 0;
+        app.ship.snap_to(0);
+
+        let backend = TestBackend::new(120, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| render(f, &app)).unwrap();
+        let buffer = terminal.backend().buffer();
+
+        let map = map_body_area(Rect::new(0, 0, 120, 40));
+        for (i, card) in planet_layout(map, 0).iter().enumerate() {
+            if card.width == 0 || card.height == 0 {
+                continue;
+            }
+            let lane = sprite_lane(*card);
+            assert_eq!(lane.height, 7, "card {i} lane must be the tall sphere lane");
+            let top = rect_symbols(buffer, Rect::new(card.x, card.y, card.width, 3));
+            assert!(
+                top.chars().any(|c| !c.is_whitespace()),
+                "card {i} legacy sprite must paint the lane's top 3 rows: '{top}'"
+            );
+            let below = rect_symbols(
+                buffer,
+                Rect::new(card.x, card.y + 3, card.width, lane.height - 3),
+            );
+            assert!(
+                below.chars().all(|c| c.is_whitespace()),
+                "card {i} rows under the legacy sprite must stay blank: '{below}'"
+            );
+        }
+    }
+
+    #[test]
     fn no_border_chrome_inside_planet_cards() {
         // Cards are chrome-free across their FULL stacked extent: no
         // retro-block corner glyphs inside any visible card, and the info
