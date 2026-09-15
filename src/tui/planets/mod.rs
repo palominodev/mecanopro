@@ -20,6 +20,7 @@ pub use lighting::{
 pub use palette::{Palette, Rgb, TIER_PALETTES};
 pub use rotation::rotation_phase;
 pub use sphere::{sample_sphere, SphereSample, Vec3};
+pub use surface::surface_step;
 
 #[cfg(test)]
 mod tests {

@@ -11,6 +11,7 @@ use crate::core::model::PlanetStatus;
 
 use super::config::PlanetConfig;
 use super::sphere::{sample_sphere, Vec3};
+use super::surface::surface_step;
 
 /// A sun direction: a unit vector in view space (see module docs).
 pub type SunDir = Vec3;
@@ -70,6 +71,19 @@ pub fn lit_step(lambert: f32, r2: f32) -> u8 {
     if is_rim(r2) { base + 1 } else { base }.min(4)
 }
 
+/// Multiplicative combination of a cell's lit ramp step with its bare
+/// terrain step: `((lit·surface + 2) / 4).min(4)`.
+///
+/// The `+2` rounding bias keeps full light faithful — `modulate(4, s)`
+/// equals `s`, so a fully lit cell shows its terrain verbatim — while an
+/// unlit cell stays at the night floor: `modulate(0, s)` equals `0` for
+/// every terrain, so terrain may only attenuate light, never create it.
+/// Monotone in `lit` for fixed terrain, so the terminator never brightens
+/// toward the dark side.
+pub fn modulate(lit: u8, surface: u8) -> u8 {
+    (((lit as u16) * (surface as u16) + 2) / 4).min(4) as u8
+}
+
 /// One cell of a shaded planet disc: `step` is the ramp step (`0..=4`) or
 /// `None` for an off-disc blank; `rim` marks limb cells whose glow was
 /// applied (the observatory may tint them).
@@ -91,11 +105,14 @@ impl ShadedCell {
 /// `diameter × diameter` grid (extra buffer capacity is left untouched),
 /// and returns the number of disc cells hit.
 ///
-/// Composition of this slice: per-cell ray-cast plus status lighting.
-/// The surface term (archetype noise) arrives in a later slice, so for
-/// now `phase` and the config's tilt only position the longitude/latitude
-/// frame the surface will sample. Zero heap allocation: caller-provided
-/// buffer, plain data cells, no formatting.
+/// Composition: per-cell ray-cast, status lighting, and the archetype
+/// terrain. Each disc cell's ramp step is
+/// `modulate(lit_step, surface_step)` over the tilt-rotated
+/// longitude/latitude frame the ray-cast produces — so `phase` and the
+/// config's tilt are visible in the shading (rotation moves terrain
+/// across the lit disc) while the silhouette stays pure view-space
+/// geometry. Zero heap allocation: caller-provided buffer, plain data
+/// cells, no formatting.
 pub fn shade_disc(
     cfg: &PlanetConfig,
     status: PlanetStatus,
@@ -115,7 +132,10 @@ pub fn shade_disc(
                 Some(sample) => {
                     hits += 1;
                     ShadedCell {
-                        step: Some(lit_step(lambert(sample.normal, sun), sample.r2)),
+                        step: Some(modulate(
+                            lit_step(lambert(sample.normal, sun), sample.r2),
+                            surface_step(cfg, sample.lon, sample.lat),
+                        )),
                         rim: is_rim(sample.r2),
                     }
                 }
@@ -128,11 +148,12 @@ pub fn shade_disc(
 #[cfg(test)]
 mod tests {
     use super::{
-        is_rim, lambert, lit_step, ramp_step, shade_disc, sun_az_el, sun_for_status,
+        is_rim, lambert, lit_step, modulate, ramp_step, shade_disc, sun_az_el, sun_for_status,
         sun_from_az_el, ShadedCell, RAMP,
     };
     use crate::core::model::PlanetStatus;
     use crate::tui::planets::config::PLANET_CONFIGS;
+    use crate::tui::planets::surface::surface_step;
 
     use super::super::sphere::{sample_sphere, Vec3};
 
@@ -324,13 +345,60 @@ mod tests {
         }
     }
 
+    /// Terrain may only attenuate light, never create it: the night floor
+    /// survives modulation intact, full light renders the terrain
+    /// verbatim, and the lit step stays the ceiling for every combination.
+    #[test]
+    fn test_modulate_preserves_the_night_floor_and_full_light_terrain() {
+        for surface in 0..=4u8 {
+            assert_eq!(
+                modulate(0, surface),
+                0,
+                "terrain {surface} cannot light an unlit cell"
+            );
+            assert_eq!(
+                modulate(4, surface),
+                surface,
+                "full light shows terrain step {surface} verbatim"
+            );
+        }
+        // Rounding pins: the +2 bias distinguishes `(lit·surface + 2) / 4`
+        // from a truncating `lit·surface / 4` at these combinations.
+        let pins = [
+            ((1u8, 2u8), 1u8),
+            ((2, 3), 2),
+            ((3, 2), 2),
+            ((2, 4), 2),
+            ((3, 4), 3),
+        ];
+        for ((lit, surface), expected) in pins {
+            assert_eq!(modulate(lit, surface), expected, "pin ({lit}, {surface})");
+        }
+        // Monotone in light for fixed terrain, never above the light.
+        for surface in 0..=4u8 {
+            let mut previous = 0u8;
+            for lit in 0..=4u8 {
+                let step = modulate(lit, surface);
+                assert!(
+                    step <= lit,
+                    "({lit},{surface}): terrain cannot outshine its light"
+                );
+                assert!(step >= previous, "({lit},{surface}): monotone in light");
+                previous = step;
+            }
+        }
+    }
+
     #[test]
     fn test_shade_disc_fills_row_major_matching_the_composition() {
         // InProgress (az 90°) puts the sun on the horizontal axis, so the
         // lit grid is transpose-ASYMMETRIC — only then does matching
         // `out[row * d + col]` against `sample_sphere(col, row, …)` prove
         // row-major rather than column-major fill. (The diagonal az-135°
-        // Conquered sun is transpose-symmetric and cannot prove it.)
+        // Conquered sun is transpose-symmetric and cannot prove it.) The
+        // expected cell is the full composition: ray-cast + lighting,
+        // then `modulate` with the archetype's terrain step sampled on
+        // the sphere's longitude/latitude frame.
         let diameter = 7u16;
         let cfg = PLANET_CONFIGS[3];
         let mut out = [ShadedCell::BLANK; 49];
@@ -344,7 +412,10 @@ mod tests {
                 let expected = match sample_sphere(col, row, diameter, cfg.tilt_deg, 0.25) {
                     None => ShadedCell::BLANK,
                     Some(sample) => ShadedCell {
-                        step: Some(lit_step(lambert(sample.normal, sun), sample.r2)),
+                        step: Some(modulate(
+                            lit_step(lambert(sample.normal, sun), sample.r2),
+                            surface_step(&cfg, sample.lon, sample.lat),
+                        )),
                         rim: is_rim(sample.r2),
                     },
                 };
@@ -420,6 +491,65 @@ mod tests {
             day_max > night_max,
             "conquered day glyphs outshine the night ({day_max} vs {night_max})"
         );
+    }
+
+    /// The surface term consumes the sphere's longitude/latitude frame,
+    /// which the phase spins: two phases must shade a longitude-varying
+    /// archetype (Craters) differently, while the disc silhouette — pure
+    /// view-space geometry — stays identical between the two.
+    #[test]
+    fn test_shade_disc_rotation_makes_the_phase_visible_in_the_shading() {
+        let cfg = PLANET_CONFIGS[2];
+        let mut first = [ShadedCell::BLANK; 49];
+        let mut second = [ShadedCell::BLANK; 49];
+        let first_hits = shade_disc(&cfg, PlanetStatus::InProgress, 0.0, 7, &mut first);
+        let second_hits = shade_disc(&cfg, PlanetStatus::InProgress, 0.5, 7, &mut second);
+        assert_eq!(first_hits, second_hits, "rotation never reshapes the disc");
+        assert_eq!(first_hits, 37, "7×7 disc cell count per design");
+        let silhouette: Vec<bool> = first.iter().map(|cell| cell.step.is_some()).collect();
+        let respun: Vec<bool> = second.iter().map(|cell| cell.step.is_some()).collect();
+        assert_eq!(silhouette, respun, "the same cells stay on the disc");
+        let moved = first
+            .iter()
+            .zip(second.iter())
+            .filter(|(before, after)| before != after)
+            .count();
+        assert!(
+            moved > 0,
+            "half a turn must move terrain on a longitude-varying surface"
+        );
+    }
+
+    /// Night-floor survival under modulation: whatever the terrain, cells
+    /// the lighting leaves unlit stay at the night floor — checked over
+    /// every config so each archetype gets a chance to try (and fail) to
+    /// paint the dark side bright.
+    #[test]
+    fn test_shade_disc_keeps_unlit_cells_at_the_night_floor() {
+        let sun = sun_for_status(PlanetStatus::Unexplored);
+        for cfg in PLANET_CONFIGS.iter() {
+            let mut out = [ShadedCell::BLANK; 49];
+            shade_disc(cfg, PlanetStatus::Unexplored, 0.3, 7, &mut out);
+            let mut checked = 0usize;
+            for row in 0..7u16 {
+                for col in 0..7u16 {
+                    let Some(sample) = sample_sphere(col, row, 7, cfg.tilt_deg, 0.3) else {
+                        continue;
+                    };
+                    if lit_step(lambert(sample.normal, sun), sample.r2) == 0 {
+                        let cell = out[row as usize * 7 + col as usize];
+                        assert_eq!(
+                            cell.step,
+                            Some(0),
+                            "{:?} cell ({row},{col}): terrain brightened the night side",
+                            cfg.archetype
+                        );
+                        checked += 1;
+                    }
+                }
+            }
+            assert!(checked > 0, "each config must exercise unlit cells");
+        }
     }
 
     /// The map renders 7 planets per tick, so `shade_disc` must not touch
