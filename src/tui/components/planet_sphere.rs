@@ -11,7 +11,9 @@
 use std::time::Duration;
 
 use crate::core::model::PlanetStatus;
-use crate::tui::planets::{PLANET_CONFIGS, RAMP, Rgb, ShadedCell, rotation_phase, shade_disc};
+use crate::tui::planets::{
+    CELL_ASPECT, PLANET_CONFIGS, RAMP, Rgb, ShadedCell, disc_cols, rotation_phase, shade_disc,
+};
 use crate::tui::theme::Theme;
 
 use ratatui::Frame;
@@ -19,13 +21,16 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
 use ratatui::style::Color;
 
-/// Map-card disc diameter: lanes are 7 rows tall, so the disc is 7x7 —
-/// the design's map-card sphere (the observatory renders larger discs).
-const MAP_CARD_DISC_DIAMETER: u16 = 7;
+/// Map-card disc row count: lanes are 7 rows tall, so the disc is
+/// 7 rows — the design's map-card sphere (the observatory renders larger
+/// discs). The disc's column count is derived from this via
+/// [`disc_cols`] so the silhouette reads round on screen rather than as
+/// a tall ellipse (terminal cells are ~2x taller than wide).
+const MAP_CARD_DISC_ROWS: u16 = 7;
 
-/// Stack backing for one map-card disc (diameter-squared cells) — the
-/// render path allocates nothing on the heap.
-const MAP_CARD_CELLS: usize = MAP_CARD_DISC_DIAMETER as usize * MAP_CARD_DISC_DIAMETER as usize;
+/// Stack backing for one map-card disc (`rows * disc_cols(rows)` cells)
+/// — the render path allocates nothing on the heap.
+const MAP_CARD_CELLS: usize = MAP_CARD_DISC_ROWS as usize * disc_cols(MAP_CARD_DISC_ROWS) as usize;
 
 /// Minimum ramp step painted in the palette's primary (day) tone; dimmer
 /// steps take the secondary (night) tone, so day glyphs always outshine
@@ -52,10 +57,11 @@ pub fn render_map_card(
     let Some(cfg) = PLANET_CONFIGS.get(tier_idx) else {
         return;
     };
-    let diameter = lane.width.min(lane.height).min(MAP_CARD_DISC_DIAMETER);
+    let rows = lane.height.min(MAP_CARD_DISC_ROWS);
+    let cols = disc_cols(rows).min(lane.width);
     let mut cells = [ShadedCell::BLANK; MAP_CARD_CELLS];
     let phase = rotation_phase(t, cfg.rotation_period, reduced_motion);
-    shade_disc(cfg, status, phase, diameter, &mut cells);
+    shade_disc(cfg, status, phase, cols, rows, &mut cells);
 
     // The palette -> terminal-color bridge (`tone` below) is the only
     // place pure `planets::palette` values become ratatui colors.
@@ -63,11 +69,11 @@ pub fn render_map_card(
     let day = tone(palette.primary);
     let night = tone(palette.secondary);
 
-    let offset_x = (lane.width - diameter) / 2;
-    let offset_y = (lane.height - diameter) / 2;
-    for row in 0..diameter {
-        for col in 0..diameter {
-            let Some(step) = cells[row as usize * diameter as usize + col as usize].step else {
+    let offset_x = (lane.width - cols) / 2;
+    let offset_y = (lane.height - rows) / 2;
+    for row in 0..rows {
+        for col in 0..cols {
+            let Some(step) = cells[row as usize * cols as usize + col as usize].step else {
                 continue;
             };
             let x = lane.x + offset_x + col;
@@ -91,23 +97,40 @@ fn tone(rgb: Rgb) -> Color {
 /// One full revolution of the observatory moon around its planet.
 const MOON_PERIOD: Duration = Duration::from_millis(12_000);
 
-/// Observatory disc diameter clamp bounds (design: observatory
+/// Observatory disc row-count clamp bounds (design: observatory
 /// structure) — the docked view renders the sphere far larger than the
-/// 7x7 map cards.
+/// 7-row map cards. The disc's column count is derived from the row
+/// count via [`disc_cols`] (terminal cells are ~2x taller than wide).
 const OBS_DISC_MIN: u16 = 9;
 const OBS_DISC_MAX: u16 = 21;
 
-/// Stack backing for the largest observatory disc (21x21 cells) — the
-/// render path allocates nothing on the heap.
-const OBS_DISC_CELLS: usize = OBS_DISC_MAX as usize * OBS_DISC_MAX as usize;
+/// Stack backing for the largest observatory disc (`OBS_DISC_MAX *
+/// disc_cols(OBS_DISC_MAX)` cells) — the render path allocates nothing
+/// on the heap.
+const OBS_DISC_CELLS: usize = OBS_DISC_MAX as usize * disc_cols(OBS_DISC_MAX) as usize;
 
-/// Ring band geometry in columns beyond the disc radius `R`: the band
-/// spans +-(R+4) with the Cassini division gap sitting at R+2.
+/// Ring band geometry in horizontal cell units beyond the disc's
+/// horizontal radius `Rx`: the band spans `+-(Rx + RING_SPAN *
+/// CELL_ASPECT)` with the Cassini division gap sitting at
+/// `Rx + CASSINI_OFFSET * CELL_ASPECT`. Both offsets are horizontal cell
+/// counts, so they scale by [`CELL_ASPECT`] to keep the same on-screen
+/// proportions as the disc itself.
 const RING_SPAN: i32 = 4;
 const CASSINI_OFFSET: i32 = 2;
 
-/// The moon orbits at radius R+6 on a squashed ellipse (a tilted
-/// orbital plane), so it can hide behind and cross in front of the disc.
+/// Horizontal margin (in columns) reserved beyond the disc width for the
+/// moon's orbit and the ring band's tips on both sides. The moon's orbit
+/// (`MOON_ORBIT * CELL_ASPECT` past the horizontal radius) reaches
+/// farther than the ring band (`RING_SPAN * CELL_ASPECT` past it), so it
+/// is the binding reserve — sizing for it keeps the ring tips inside the
+/// canvas too.
+const HORIZONTAL_MARGIN: u16 = 2 * MOON_ORBIT as u16 * CELL_ASPECT;
+
+/// The moon orbits at horizontal radius `Rx + MOON_ORBIT * CELL_ASPECT`
+/// on a squashed ellipse (a tilted orbital plane) so it can hide behind
+/// and cross in front of the disc; the vertical orbit radius stays
+/// `(Ry + MOON_ORBIT) * MOON_SQUASH` — a vertical offset needs no
+/// [`CELL_ASPECT`] scaling since it is already in row units.
 const MOON_ORBIT: i32 = 6;
 const MOON_SQUASH: f32 = 0.5;
 
@@ -118,13 +141,15 @@ const TRACE_SAMPLES: usize = 24;
 /// sphere with rings, a moon on a dotted orbit, and a telemetry HUD.
 ///
 /// Contract (design: observatory structure): the body splits 62/38 into
-/// a planet canvas and a HUD panel; the disc diameter clamps to
-/// `clamp(min(canvas.h, canvas.w - 10), 9, 21)`; the ring band spans
-/// +-(R+4) columns around the equator with a Cassini division gap, its
-/// west arc passing in front of the disc and its east arc behind it;
-/// the moon orbits at R+6 outside the disc, occluded on the far side.
-/// Zero heap allocation — every glyph is a direct buffer write, clipped
-/// to `area`, so degenerate sizes never panic.
+/// a planet canvas and a HUD panel; the disc row count clamps to
+/// `clamp(min(canvas.h, rows implied by canvas.w), 9, 21)` and the
+/// column count is `disc_cols(rows)` so the disc reads round on screen;
+/// the ring band spans `+-(Rx + 4*CELL_ASPECT)` columns around the
+/// equator with a Cassini division gap, its west arc passing in front of
+/// the disc and its east arc behind it; the moon orbits outside the disc
+/// on a squashed ellipse, occluded on the far side. Zero heap allocation
+/// — every glyph is a direct buffer write, clipped to `area`, so
+/// degenerate sizes never panic.
 pub fn render_observatory(
     f: &mut Frame,
     area: Rect,
@@ -149,24 +174,31 @@ pub fn render_observatory(
         area.height,
     );
 
-    // Disc diameter: clamp(min(canvas.h, canvas.w - 10), 9, 21); the
-    // -10 reserves horizontal room for the ring tips.
-    let fit = canvas.height.min(canvas.width.saturating_sub(10));
-    let diameter = fit.clamp(OBS_DISC_MIN, OBS_DISC_MAX);
-    let radius = diameter / 2;
+    // Disc rows: clamp(min(canvas.h, rows implied by the horizontal
+    // budget), 9, 21). `disc_cols(rows) <= budget` iff
+    // `rows <= (budget + 1) / CELL_ASPECT` since
+    // `disc_cols(rows) = rows * CELL_ASPECT - 1`; the margin reserves
+    // horizontal room for the moon's orbit and the ring tips.
+    let width_budget = canvas.width.saturating_sub(HORIZONTAL_MARGIN);
+    let rows_from_width = (width_budget + 1) / CELL_ASPECT;
+    let fit = canvas.height.min(rows_from_width);
+    let rows = fit.clamp(OBS_DISC_MIN, OBS_DISC_MAX);
+    let cols = disc_cols(rows);
+    let (radius_x, radius_y) = (cols / 2, rows / 2);
     let cx = canvas.x as i32 + canvas.width as i32 / 2;
     let cy = canvas.y as i32 + canvas.height as i32 / 2;
 
     // 1. Dotted orbit trace in Theme::MUTED — painted first so the
     //    planet, rings, and moon draw over it; dots over the disc's
-    //    bounding square are skipped (the trace passes behind).
-    let orbit = (radius as i32 + MOON_ORBIT) as f32;
+    //    bounding box are skipped (the trace passes behind).
+    let orbit_x = radius_x as f32 + (MOON_ORBIT * CELL_ASPECT as i32) as f32;
+    let orbit_y = (radius_y as i32 + MOON_ORBIT) as f32 * MOON_SQUASH;
     let moon_theta = std::f32::consts::TAU * rotation_phase(t, MOON_PERIOD, reduced_motion);
     for i in 0..TRACE_SAMPLES {
         let theta = std::f32::consts::TAU * i as f32 / TRACE_SAMPLES as f32;
-        let dx = orbit * theta.cos();
-        let dy = -orbit * MOON_SQUASH * theta.sin();
-        if dx.abs() as i32 <= radius as i32 && dy.abs() as i32 <= radius as i32 {
+        let dx = orbit_x * theta.cos();
+        let dy = -orbit_y * theta.sin();
+        if dx.abs() as i32 <= radius_x as i32 && dy.abs() as i32 <= radius_y as i32 {
             continue;
         }
         paint(
@@ -185,16 +217,15 @@ pub fn render_observatory(
     //    always glows.
     let mut cells = [ShadedCell::BLANK; OBS_DISC_CELLS];
     let phase = rotation_phase(t, cfg.rotation_period, reduced_motion);
-    let span = diameter as usize;
-    shade_disc(cfg, status, phase, diameter, &mut cells[..span * span]);
+    shade_disc(cfg, status, phase, cols, rows, &mut cells);
 
     let day = tone(cfg.palette.primary);
     let night = tone(cfg.palette.secondary);
-    let top_x = cx - radius as i32;
-    let top_y = cy - radius as i32;
-    for row in 0..diameter as i32 {
-        for col in 0..diameter as i32 {
-            let cell = cells[row as usize * span + col as usize];
+    let top_x = cx - radius_x as i32;
+    let top_y = cy - radius_y as i32;
+    for row in 0..rows as i32 {
+        for col in 0..cols as i32 {
+            let cell = cells[row as usize * cols as usize + col as usize];
             let Some(step) = cell.step else {
                 continue;
             };
@@ -215,17 +246,19 @@ pub fn render_observatory(
     }
 
     // 3. Ring band on the equator row: inner arc `≡`, Cassini division
-    //    gap at R+2, outer arc `─`. The west arc passes in front of the
-    //    planet (painted over the disc), the east arc behind it (the
-    //    disc cells win).
-    for dx in -(radius as i32 + RING_SPAN)..=(radius as i32 + RING_SPAN) {
-        if dx.abs() == radius as i32 + CASSINI_OFFSET {
+    //    gap at `Rx + CASSINI_OFFSET*CELL_ASPECT`, outer arc `─`. The
+    //    west arc passes in front of the planet (painted over the disc),
+    //    the east arc behind it (the disc cells win).
+    let ring_reach = radius_x as i32 + RING_SPAN * CELL_ASPECT as i32;
+    let cassini = radius_x as i32 + CASSINI_OFFSET * CELL_ASPECT as i32;
+    for dx in -ring_reach..=ring_reach {
+        if dx.abs() == cassini {
             continue; // the Cassini division: a blank gap in the band
         }
-        if in_disc(dx, 0, diameter) && dx >= 0 {
+        if in_disc(dx, 0, cols, rows) && dx >= 0 {
             continue; // east arc passes behind the planet
         }
-        let glyph = if dx.abs() <= radius as i32 + 1 {
+        let glyph = if dx.abs() <= radius_x as i32 + 1 {
             '≡'
         } else {
             '─'
@@ -235,10 +268,10 @@ pub fn render_observatory(
 
     // 4. The moon: on the far side of the orbit it hides behind the
     //    disc; on the near side it draws in front of disc and trace.
-    let moon_x = cx + (orbit * moon_theta.cos()).round() as i32;
-    let moon_y = cy - (orbit * MOON_SQUASH * moon_theta.sin()).round() as i32;
+    let moon_x = cx + (orbit_x * moon_theta.cos()).round() as i32;
+    let moon_y = cy - (orbit_y * moon_theta.sin()).round() as i32;
     let moon_behind = moon_theta.sin() > 0.0;
-    if !(moon_behind && in_disc(moon_x - cx, moon_y - cy, diameter)) {
+    if !(moon_behind && in_disc(moon_x - cx, moon_y - cy, cols, rows)) {
         paint(buf, canvas, moon_x, moon_y, '☾', Theme::TEXT);
     }
 
@@ -247,11 +280,13 @@ pub fn render_observatory(
 }
 
 /// Whether a cell at `dx`/`dy` offsets from the disc center lies inside
-/// the painted silhouette (integer mirror of `sample_sphere`'s
-/// unit-disc test; half-cell off for even diameters).
-fn in_disc(dx: i32, dy: i32, diameter: u16) -> bool {
-    let d = diameter as i32;
-    (2 * dx) * (2 * dx) + (2 * dy) * (2 * dy) <= d * d
+/// the painted silhouette: the integer mirror of `sample_sphere`'s unit
+/// disc test `(2dx/cols)^2 + (2dy/rows)^2 <= 1`, cross-multiplied to
+/// stay in integer math (half-cell off for even `cols`/`rows`).
+fn in_disc(dx: i32, dy: i32, cols: u16, rows: u16) -> bool {
+    let (c, r) = (cols as i64, rows as i64);
+    let (dx, dy) = (dx as i64, dy as i64);
+    (2 * dx) * (2 * dx) * r * r + (2 * dy) * (2 * dy) * c * c <= c * c * r * r
 }
 
 /// Spanish status badge for the observatory HUD (mirrors the galaxy
@@ -385,7 +420,7 @@ fn paint(buf: &mut Buffer, area: Rect, x: i32, y: i32, glyph: char, color: Color
 mod tests {
     use super::{MOON_PERIOD, render_map_card, render_observatory};
     use crate::core::model::PlanetStatus;
-    use crate::tui::planets::{RAMP, TIER_PALETTES};
+    use crate::tui::planets::{RAMP, TIER_PALETTES, disc_cols};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use ratatui::buffer::Buffer;
@@ -856,11 +891,12 @@ mod tests {
         );
 
         // The disc itself paints palette-colored ramp cells within the
-        // 21-cell design ceiling.
+        // design ceiling: at most `disc_cols(OBS_DISC_MAX)` columns wide
+        // and `OBS_DISC_MAX` rows tall.
         let (x0, y0, x1, y1) = disc_bbox(&buf, canvas, 0);
         assert!(
-            x1 - x0 <= 21 && y1 - y0 <= 21,
-            "disc bbox ({x0},{y0})..({x1},{y1}) must respect the 21-cell clamp"
+            x1 - x0 < disc_cols(21) && y1 - y0 < 21,
+            "disc bbox ({x0},{y0})..({x1},{y1}) must respect the design ceiling"
         );
 
         let hud_symbols = rect_symbols(&buf, hud);
@@ -1102,17 +1138,20 @@ mod tests {
 
     #[test]
     fn observatory_disc_diameter_follows_the_clamp_formula() {
-        // clamp(min(canvas.h, canvas.w - 10), 9, 21) per the design: a
-        // large canvas hits the 21 ceiling, a width-limited canvas paints
-        // w-10 columns, and a tiny canvas floors at 9 (drawing larger
-        // than the strict fit, clipped by the area guard).
+        // rows = clamp(min(canvas.h, rows implied by the horizontal
+        // budget), 9, 21); cols = disc_cols(rows). A large canvas hits
+        // the row ceiling, a height-limited canvas paints canvas.h rows,
+        // a width-limited canvas paints the rows the horizontal budget
+        // allows, and a tiny canvas floors at 9 rows (drawing larger
+        // than the strict fit, clipped by the area guard). Every case's
+        // column span must equal `disc_cols` of its row span.
         let cases: [(u16, u16, u16); 4] = [
-            (100, 24, 21), // height 24 vs width 52 -> ceiling 21
+            (110, 30, 21), // rows_from_width 22 vs height 30 -> ceiling 21
             (100, 16, 16), // height 16 limits below the ceiling
-            (44, 30, 17),  // canvas width 27 -> w-10 = 17
-            (30, 10, 9),   // canvas width 18 -> w-10 = 8 floors at 9
+            (76, 30, 12),  // canvas width 47 -> rows_from_width 12
+            (30, 10, 9),   // canvas width 18 -> rows_from_width 0, floors at 9
         ];
-        for (width, height, expected) in cases {
+        for (width, height, expected_rows) in cases {
             let (canvas, _) = observatory_regions(width, height);
             let buf = draw_observatory(
                 width,
@@ -1124,18 +1163,112 @@ mod tests {
                 true,
             );
             let (x0, y0, x1, y1) = disc_bbox(&buf, canvas, 0);
-            assert_eq!(
-                x1 - x0 + 1,
-                expected,
-                "{width}x{height}: disc must span {expected} columns (got {})",
-                x1 - x0 + 1
-            );
+            let expected_cols = disc_cols(expected_rows);
             assert_eq!(
                 y1 - y0 + 1,
-                expected,
-                "{width}x{height}: disc must span {expected} rows (got {})",
+                expected_rows,
+                "{width}x{height}: disc must span {expected_rows} rows (got {})",
                 y1 - y0 + 1
             );
+            assert_eq!(
+                x1 - x0 + 1,
+                expected_cols,
+                "{width}x{height}: disc must span {expected_cols} columns (got {})",
+                x1 - x0 + 1
+            );
+        }
+    }
+
+    /// The map card's ray-cast disc must silhouette wider than it is
+    /// tall on screen: the widest painted row spans more columns than
+    /// the tallest painted column spans rows.
+    #[test]
+    fn map_card_disc_is_wider_than_tall() {
+        let lane = Rect::new(0, 0, 14, 7);
+        let buf = draw_map_card(
+            20,
+            9,
+            lane,
+            0,
+            PlanetStatus::Conquered,
+            Duration::ZERO,
+            true,
+        );
+        let painted = lane_painted(&buf, lane);
+        assert!(!painted.is_empty(), "the disc must paint at least one cell");
+
+        let widest_row = painted
+            .iter()
+            .fold(std::collections::HashMap::new(), |mut rows, &(x, y, ..)| {
+                let (min_x, max_x) = rows.entry(y).or_insert((x, x));
+                *min_x = (*min_x).min(x);
+                *max_x = (*max_x).max(x);
+                rows
+            })
+            .values()
+            .map(|(min_x, max_x)| max_x - min_x + 1)
+            .max()
+            .expect("at least one painted row");
+        let tallest_col = painted
+            .iter()
+            .fold(std::collections::HashMap::new(), |mut cols, &(x, y, ..)| {
+                let (min_y, max_y) = cols.entry(x).or_insert((y, y));
+                *min_y = (*min_y).min(y);
+                *max_y = (*max_y).max(y);
+                cols
+            })
+            .values()
+            .map(|(min_y, max_y)| max_y - min_y + 1)
+            .max()
+            .expect("at least one painted column");
+
+        assert!(
+            widest_row > tallest_col,
+            "the map card disc must paint wider than tall: widest row {widest_row} \
+             vs tallest column {tallest_col}"
+        );
+    }
+
+    /// The observatory disc must likewise silhouette wider than tall, and
+    /// the ring band's tips must still land inside the canvas rather
+    /// than being clipped away by too tight a horizontal budget.
+    #[test]
+    fn observatory_disc_is_wider_than_tall_and_ring_tips_fit_the_canvas() {
+        let (canvas, _) = observatory_regions(100, 24);
+        let buf = draw_observatory(
+            100,
+            24,
+            0,
+            "CIMIENTOS",
+            PlanetStatus::Conquered,
+            Duration::ZERO,
+            true,
+        );
+
+        let (x0, y0, x1, y1) = disc_bbox(&buf, canvas, 0);
+        let (cols_span, rows_span) = (x1 - x0 + 1, y1 - y0 + 1);
+        assert!(
+            cols_span > rows_span,
+            "the observatory disc must paint wider than tall: {cols_span} cols vs {rows_span} rows"
+        );
+
+        // Both ring glyphs (`≡` and `─`) must land strictly inside the
+        // canvas: none clipped away at the left/right edge.
+        for glyph in ['≡', '─'] {
+            let positions = glyph_positions(&buf, canvas, glyph);
+            assert!(
+                !positions.is_empty(),
+                "ring glyph {glyph:?} must paint at least one cell"
+            );
+            for (x, _) in positions {
+                assert!(
+                    x > canvas.x && x < canvas.x + canvas.width - 1,
+                    "ring glyph {glyph:?} at column {x} must stay inside the canvas \
+                     ({}..{})",
+                    canvas.x,
+                    canvas.x + canvas.width
+                );
+            }
         }
     }
 }
