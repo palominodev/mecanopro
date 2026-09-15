@@ -92,7 +92,7 @@ pub fn sample_sphere(
 
 #[cfg(test)]
 mod tests {
-    use super::{sample_sphere, SphereSample};
+    use super::{SphereSample, sample_sphere};
     use std::f32::consts::FRAC_PI_2;
 
     /// Design anchor: a 7×7 grid holds the design's ~37-cell disc.

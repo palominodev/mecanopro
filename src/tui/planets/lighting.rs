@@ -10,7 +10,7 @@
 use crate::core::model::PlanetStatus;
 
 use super::config::PlanetConfig;
-use super::sphere::{sample_sphere, Vec3};
+use super::sphere::{Vec3, sample_sphere};
 use super::surface::surface_step;
 
 /// A sun direction: a unit vector in view space (see module docs).
@@ -148,14 +148,14 @@ pub fn shade_disc(
 #[cfg(test)]
 mod tests {
     use super::{
-        is_rim, lambert, lit_step, modulate, ramp_step, shade_disc, sun_az_el, sun_for_status,
-        sun_from_az_el, ShadedCell, RAMP,
+        RAMP, ShadedCell, is_rim, lambert, lit_step, modulate, ramp_step, shade_disc, sun_az_el,
+        sun_for_status, sun_from_az_el,
     };
     use crate::core::model::PlanetStatus;
     use crate::tui::planets::config::PLANET_CONFIGS;
     use crate::tui::planets::surface::surface_step;
 
-    use super::super::sphere::{sample_sphere, Vec3};
+    use super::super::sphere::{Vec3, sample_sphere};
 
     const STATUSES: [PlanetStatus; 4] = [
         PlanetStatus::Conquered,

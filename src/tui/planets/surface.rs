@@ -155,7 +155,7 @@ fn ice_storm_step(cfg: &PlanetConfig, lon: f32, lat: f32) -> u8 {
 mod tests {
     use std::f32::consts::{PI, TAU};
 
-    use super::super::config::{PlanetConfig, PLANET_CONFIGS};
+    use super::super::config::{PLANET_CONFIGS, PlanetConfig};
     use super::{lattice_hash, surface_step, value_noise};
 
     /// Quantized surface steps along the equator (64 longitude samples).

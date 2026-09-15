@@ -12,14 +12,14 @@ pub mod rotation;
 pub mod sphere;
 pub mod surface;
 
-pub use config::{Archetype, PlanetConfig, PLANET_CONFIGS};
+pub use config::{Archetype, PLANET_CONFIGS, PlanetConfig};
 pub use lighting::{
-    is_rim, lambert, lit_step, ramp_step, shade_disc, sun_az_el, sun_for_status, sun_from_az_el,
-    ShadedCell, SunDir, RAMP,
+    RAMP, ShadedCell, SunDir, is_rim, lambert, lit_step, ramp_step, shade_disc, sun_az_el,
+    sun_for_status, sun_from_az_el,
 };
 pub use palette::{Palette, Rgb, TIER_PALETTES};
 pub use rotation::rotation_phase;
-pub use sphere::{sample_sphere, SphereSample, Vec3};
+pub use sphere::{SphereSample, Vec3, sample_sphere};
 pub use surface::surface_step;
 
 #[cfg(test)]
