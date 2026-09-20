@@ -35,7 +35,10 @@ impl TypingArea {
         }
 
         let title = if let Some(dead) = engine.pending_dead_key {
-            format!("⚡ TRANSMISIÓN ENTRADA · [ TECLA MUERTA ACTIVA: '{}' ]", dead)
+            format!(
+                "⚡ TRANSMISIÓN ENTRADA · [ TECLA MUERTA ACTIVA: '{}' ]",
+                dead
+            )
         } else {
             format!("✦ TRANSMISIÓN DE VUELO: {} ✦", engine.lesson.title)
         };

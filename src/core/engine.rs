@@ -48,12 +48,11 @@ impl TypingEngine {
         match (self.start_time, self.status) {
             (None, _) => Duration::ZERO,
             (Some(start), EngineStatus::Running) => start.elapsed(),
-            (Some(_), EngineStatus::Finished) => {
-                self.keystrokes
-                    .last()
-                    .map(|k| k.timestamp)
-                    .unwrap_or(Duration::ZERO)
-            }
+            (Some(_), EngineStatus::Finished) => self
+                .keystrokes
+                .last()
+                .map(|k| k.timestamp)
+                .unwrap_or(Duration::ZERO),
             (Some(start), EngineStatus::Idle) => start.elapsed(),
         }
     }
@@ -167,7 +166,7 @@ mod tests {
         assert_eq!(engine.status, EngineStatus::Idle);
         assert_eq!(engine.cursor, 0);
         assert_eq!(engine.current_expected_char(), Some('h'));
-        assert_eq!(engine.is_finished(), false);
+        assert!(!engine.is_finished());
     }
 
     #[test]
@@ -177,24 +176,24 @@ mod tests {
         let start = Instant::now();
 
         // Type 'm'
-        assert_eq!(engine.handle_char('m', start), false);
+        assert!(!engine.handle_char('m', start));
         assert_eq!(engine.cursor, 1);
         assert_eq!(engine.current_expected_char(), Some('á'));
 
         // Dead key '´'
-        assert_eq!(engine.handle_char('´', start + Duration::from_millis(100)), false);
+        assert!(!engine.handle_char('´', start + Duration::from_millis(100)));
         assert_eq!(engine.cursor, 1);
 
         // Compose 'a' with '´' -> 'á'
-        assert_eq!(engine.handle_char('a', start + Duration::from_millis(200)), false);
+        assert!(!engine.handle_char('a', start + Duration::from_millis(200)));
         assert_eq!(engine.cursor, 2);
         assert_eq!(engine.current_expected_char(), Some('s'));
 
         // Type 's' -> finished
-        assert_eq!(engine.handle_char('s', start + Duration::from_millis(300)), true);
-        assert_eq!(engine.is_finished(), true);
+        assert!(engine.handle_char('s', start + Duration::from_millis(300)));
+        assert!(engine.is_finished());
         assert_eq!(engine.keystrokes.len(), 3);
         assert_eq!(engine.keystrokes[1].actual, 'á');
-        assert_eq!(engine.keystrokes[1].is_correct, true);
+        assert!(engine.keystrokes[1].is_correct);
     }
 }

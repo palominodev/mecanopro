@@ -1,11 +1,11 @@
 use crate::core::dictation::DictationEngine;
 use crate::tui::theme::Theme;
 use ratatui::{
+    Frame,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::Paragraph,
-    Frame,
 };
 
 pub struct DictationArea;
@@ -27,12 +27,16 @@ impl DictationArea {
             if idx < engine.current_word_index {
                 ribbon_spans.push(Span::styled(
                     format!(" 🚀 {} ", word),
-                    Style::default().fg(Theme::SUCCESS).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(Theme::SUCCESS)
+                        .add_modifier(Modifier::BOLD),
                 ));
             } else if idx == engine.current_word_index {
                 ribbon_spans.push(Span::styled(
                     format!(" [ TRANSMISIÓN {}/{} ] ", idx + 1, engine.words.len()),
-                    Style::default().fg(Theme::PRIMARY).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(Theme::PRIMARY)
+                        .add_modifier(Modifier::BOLD),
                 ));
             } else {
                 ribbon_spans.push(Span::styled(
@@ -43,7 +47,10 @@ impl DictationArea {
         }
 
         let ribbon = Paragraph::new(Line::from(ribbon_spans))
-            .block(Theme::retro_block("✦ SECUENCIA DE TRANSMISIONES DE VOZ ✦", Theme::NEBULA_PURPLE))
+            .block(Theme::retro_block(
+                "✦ SECUENCIA DE TRANSMISIONES DE VOZ ✦",
+                Theme::NEBULA_PURPLE,
+            ))
             .alignment(Alignment::Center);
         f.render_widget(ribbon, chunks[0]);
 
@@ -90,23 +97,54 @@ impl DictationArea {
 
         // 3. Audio & Status Banner
         let reaction_display = if let Some(last_reaction) = engine.word_reaction_times.last() {
-            format!("Último reflejo: {:.0} ms", last_reaction.as_secs_f64() * 1000.0)
+            format!(
+                "Último reflejo: {:.0} ms",
+                last_reaction.as_secs_f64() * 1000.0
+            )
         } else {
             "Sintonizando canal auditivo...".to_string()
         };
 
         let status_spans = vec![
-            Span::styled(" [📡 FRECUENCIA AUDIO] ", Style::default().fg(Theme::SECONDARY).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                " [📡 FRECUENCIA AUDIO] ",
+                Style::default()
+                    .fg(Theme::SECONDARY)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled("Sintetizador: ", Style::default().fg(Theme::MUTED)),
-            Span::styled(format!("{} ", engine.config.current_voice_name()), Style::default().fg(Theme::TEXT).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                format!("{} ", engine.config.current_voice_name()),
+                Style::default()
+                    .fg(Theme::TEXT)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled("• ", Style::default().fg(Theme::MUTED)),
             Span::styled("Velocidad: ", Style::default().fg(Theme::MUTED)),
-            Span::styled(format!("{:.1}x ", engine.config.speech_rate), Style::default().fg(Theme::ACCENT).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                format!("{:.1}x ", engine.config.speech_rate),
+                Style::default()
+                    .fg(Theme::ACCENT)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled("• ", Style::default().fg(Theme::MUTED)),
             Span::styled(reaction_display, Style::default().fg(Theme::PRIMARY)),
-            Span::styled(" • [TAB] ", Style::default().fg(Theme::SECONDARY).add_modifier(Modifier::BOLD)),
-            Span::styled(format!("Repetir ({}) ", engine.replay_count), Style::default().fg(Theme::TEXT)),
-            Span::styled("• [F2 / Shift+TAB] ", Style::default().fg(Theme::PRIMARY).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                " • [TAB] ",
+                Style::default()
+                    .fg(Theme::SECONDARY)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!("Repetir ({}) ", engine.replay_count),
+                Style::default().fg(Theme::TEXT),
+            ),
+            Span::styled(
+                "• [F2 / Shift+TAB] ",
+                Style::default()
+                    .fg(Theme::PRIMARY)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled("Cambiar voz", Style::default().fg(Theme::TEXT)),
         ];
 

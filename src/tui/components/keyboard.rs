@@ -203,14 +203,10 @@ impl KeyboardVisualizer {
                         .add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
                 } else if key.char_match.is_none() {
                     // Utility key (Tab, Shift, Enter)
-                    Style::default()
-                        .fg(Theme::MUTED)
-                        .bg(Color::Rgb(24, 26, 32))
+                    Style::default().fg(Theme::MUTED).bg(Color::Rgb(24, 26, 32))
                 } else {
                     // Standard key colored with its ergonomic finger zone
-                    Style::default()
-                        .fg(Theme::TEXT)
-                        .bg(Theme::SURFACE)
+                    Style::default().fg(Theme::TEXT).bg(Theme::SURFACE)
                 };
 
                 spans.push(Span::styled(format!("[{}]", key.display), style));
@@ -227,21 +223,34 @@ impl KeyboardVisualizer {
                 .bg(Theme::SECONDARY)
                 .add_modifier(Modifier::BOLD)
         } else {
-            Style::default()
-                .fg(Theme::TEXT)
-                .bg(Theme::SURFACE)
+            Style::default().fg(Theme::TEXT).bg(Theme::SURFACE)
         };
 
         let space_row = vec![
-            Span::styled("[ CTRL ]", Style::default().fg(Theme::MUTED).bg(Color::Rgb(24, 26, 32))),
+            Span::styled(
+                "[ CTRL ]",
+                Style::default().fg(Theme::MUTED).bg(Color::Rgb(24, 26, 32)),
+            ),
             Span::raw(" "),
-            Span::styled("[ ALT ]", Style::default().fg(Theme::MUTED).bg(Color::Rgb(24, 26, 32))),
+            Span::styled(
+                "[ ALT ]",
+                Style::default().fg(Theme::MUTED).bg(Color::Rgb(24, 26, 32)),
+            ),
             Span::raw("  "),
-            Span::styled("[                    ESPACIO                    ]", space_style),
+            Span::styled(
+                "[                    ESPACIO                    ]",
+                space_style,
+            ),
             Span::raw("  "),
-            Span::styled("[ ALT GR ]", Style::default().fg(Theme::MUTED).bg(Color::Rgb(24, 26, 32))),
+            Span::styled(
+                "[ ALT GR ]",
+                Style::default().fg(Theme::MUTED).bg(Color::Rgb(24, 26, 32)),
+            ),
             Span::raw(" "),
-            Span::styled("[ CTRL ]", Style::default().fg(Theme::MUTED).bg(Color::Rgb(24, 26, 32))),
+            Span::styled(
+                "[ CTRL ]",
+                Style::default().fg(Theme::MUTED).bg(Color::Rgb(24, 26, 32)),
+            ),
         ];
         lines.push(Line::from(space_row));
         lines.push(Line::from(""));
@@ -257,20 +266,28 @@ impl KeyboardVisualizer {
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled("   •   Guía Fila Base: ", Style::default().fg(Theme::MUTED)),
-            Span::styled("ASDF", Style::default().fg(FingerZone::LeftIndex.color()).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "ASDF",
+                Style::default()
+                    .fg(FingerZone::LeftIndex.color())
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled(" (Izq) / ", Style::default().fg(Theme::MUTED)),
-            Span::styled("JKLÑ", Style::default().fg(FingerZone::RightIndex.color()).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "JKLÑ",
+                Style::default()
+                    .fg(FingerZone::RightIndex.color())
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled(" (Der)", Style::default().fg(Theme::MUTED)),
         ];
         lines.push(Line::from(finger_spans));
 
         Paragraph::new(lines)
-            .block(
-                Theme::retro_block(
-                    "✦ CABINA DE MANDO: TECLADO ESPAÑOL ISO (GUÍA ERGONÓMICA) ✦",
-                    Theme::PRIMARY,
-                )
-            )
+            .block(Theme::retro_block(
+                "✦ CABINA DE MANDO: TECLADO ESPAÑOL ISO (GUÍA ERGONÓMICA) ✦",
+                Theme::PRIMARY,
+            ))
             .alignment(Alignment::Center)
     }
 
@@ -285,7 +302,9 @@ impl KeyboardVisualizer {
             Some('6' | '7' | 'y' | 'u' | 'h' | 'j' | 'n' | 'm' | 'ú' | 'ü') => RightIndex,
             Some('8' | 'i' | 'k' | ',' | 'í') => RightMiddle,
             Some('9' | 'o' | 'l' | '.' | 'ó') => RightRing,
-            Some('0' | '\'' | '¡' | 'p' | '+' | 'ñ' | '´' | 'ç' | '-' | '¿' | '?' | '!') => RightPinky,
+            Some('0' | '\'' | '¡' | 'p' | '+' | 'ñ' | '´' | 'ç' | '-' | '¿' | '?' | '!') => {
+                RightPinky
+            }
             Some('á') => RightPinky, // Dead key accent first
             _ => Thumb,
         }
@@ -298,10 +317,25 @@ mod tests {
 
     #[test]
     fn test_finger_zones_mapping() {
-        assert_eq!(KeyboardVisualizer::finger_for_char(Some('a')), FingerZone::LeftPinky);
-        assert_eq!(KeyboardVisualizer::finger_for_char(Some('f')), FingerZone::LeftIndex);
-        assert_eq!(KeyboardVisualizer::finger_for_char(Some('j')), FingerZone::RightIndex);
-        assert_eq!(KeyboardVisualizer::finger_for_char(Some('ñ')), FingerZone::RightPinky);
-        assert_eq!(KeyboardVisualizer::finger_for_char(Some(' ')), FingerZone::Thumb);
+        assert_eq!(
+            KeyboardVisualizer::finger_for_char(Some('a')),
+            FingerZone::LeftPinky
+        );
+        assert_eq!(
+            KeyboardVisualizer::finger_for_char(Some('f')),
+            FingerZone::LeftIndex
+        );
+        assert_eq!(
+            KeyboardVisualizer::finger_for_char(Some('j')),
+            FingerZone::RightIndex
+        );
+        assert_eq!(
+            KeyboardVisualizer::finger_for_char(Some('ñ')),
+            FingerZone::RightPinky
+        );
+        assert_eq!(
+            KeyboardVisualizer::finger_for_char(Some(' ')),
+            FingerZone::Thumb
+        );
     }
 }

@@ -2,10 +2,10 @@ use crossterm::{
     cursor::Show,
     event::{DisableMouseCapture, EnableMouseCapture},
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
-use mecanopro::tui::{render, App, EventHandler};
-use ratatui::{backend::CrosstermBackend, layout::Rect, Terminal};
+use mecanopro::tui::{App, EventHandler, render};
+use ratatui::{Terminal, backend::CrosstermBackend, layout::Rect};
 use std::io;
 use std::io::stdout;
 use std::panic;
@@ -16,7 +16,12 @@ use std::time::Instant;
 /// and the normal teardown path so they can never drift.
 fn restore_terminal() -> io::Result<()> {
     disable_raw_mode()?;
-    execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture, Show)
+    execute!(
+        io::stdout(),
+        LeaveAlternateScreen,
+        DisableMouseCapture,
+        Show
+    )
 }
 
 fn setup_panic_hook() {

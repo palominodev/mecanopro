@@ -73,11 +73,7 @@ impl MetricsCalculator {
             return 100.0;
         }
 
-        let variance = latencies_ms
-            .iter()
-            .map(|l| (l - mean).powi(2))
-            .sum::<f64>()
-            / count;
+        let variance = latencies_ms.iter().map(|l| (l - mean).powi(2)).sum::<f64>() / count;
 
         let std_dev = variance.sqrt();
         let cv = std_dev / mean; // Coefficient of variation
@@ -96,7 +92,12 @@ impl MetricsCalculator {
 mod tests {
     use super::*;
 
-    fn dummy_keystroke(expected: char, actual: char, timestamp_ms: u64, latency_ms: u64) -> KeyStroke {
+    fn dummy_keystroke(
+        expected: char,
+        actual: char,
+        timestamp_ms: u64,
+        latency_ms: u64,
+    ) -> KeyStroke {
         KeyStroke {
             expected,
             actual,
@@ -147,22 +148,52 @@ mod tests {
         };
 
         // Even with high CPM, should NOT pass Tier 1 because accuracy < 96.0%
-        assert!(!MetricsCalculator::meets_progression_gate(&metrics, &Tier::Tier1Foundation));
+        assert!(!MetricsCalculator::meets_progression_gate(
+            &metrics,
+            &Tier::Tier1Foundation
+        ));
 
         // Once accuracy is >= 96.0% and CPM >= 50, check progression against tier thresholds
         metrics.accuracy = 96.0;
-        assert!(MetricsCalculator::meets_progression_gate(&metrics, &Tier::Tier1Foundation));
-        assert!(MetricsCalculator::meets_progression_gate(&metrics, &Tier::Tier2FullAlphabet));
-        assert!(MetricsCalculator::meets_progression_gate(&metrics, &Tier::Tier3SpanishOrthography));
+        assert!(MetricsCalculator::meets_progression_gate(
+            &metrics,
+            &Tier::Tier1Foundation
+        ));
+        assert!(MetricsCalculator::meets_progression_gate(
+            &metrics,
+            &Tier::Tier2FullAlphabet
+        ));
+        assert!(MetricsCalculator::meets_progression_gate(
+            &metrics,
+            &Tier::Tier3SpanishOrthography
+        ));
         // With CPM 200, it cannot pass Tier 4 (needs 275 CPM) or Tier 7 (needs 750 CPM)
-        assert!(!MetricsCalculator::meets_progression_gate(&metrics, &Tier::Tier4NumbersAndSymbols));
-        assert!(!MetricsCalculator::meets_progression_gate(&metrics, &Tier::Tier7GrandMaster));
+        assert!(!MetricsCalculator::meets_progression_gate(
+            &metrics,
+            &Tier::Tier4NumbersAndSymbols
+        ));
+        assert!(!MetricsCalculator::meets_progression_gate(
+            &metrics,
+            &Tier::Tier7GrandMaster
+        ));
 
         // When CPM reaches 750+ (150 WPM) with accuracy >= 96.0%, it unlocks Grand Master
         metrics.cpm = 750.0;
-        assert!(MetricsCalculator::meets_progression_gate(&metrics, &Tier::Tier4NumbersAndSymbols));
-        assert!(MetricsCalculator::meets_progression_gate(&metrics, &Tier::Tier5SpeedAndCadence));
-        assert!(MetricsCalculator::meets_progression_gate(&metrics, &Tier::Tier6AdvancedFluency));
-        assert!(MetricsCalculator::meets_progression_gate(&metrics, &Tier::Tier7GrandMaster));
+        assert!(MetricsCalculator::meets_progression_gate(
+            &metrics,
+            &Tier::Tier4NumbersAndSymbols
+        ));
+        assert!(MetricsCalculator::meets_progression_gate(
+            &metrics,
+            &Tier::Tier5SpeedAndCadence
+        ));
+        assert!(MetricsCalculator::meets_progression_gate(
+            &metrics,
+            &Tier::Tier6AdvancedFluency
+        ));
+        assert!(MetricsCalculator::meets_progression_gate(
+            &metrics,
+            &Tier::Tier7GrandMaster
+        ));
     }
 }

@@ -1,6 +1,6 @@
 use crate::core::model::{
-    day_index, schema_v1, BestScore, KeyStroke, SessionBucket, SessionKind, SessionRecord,
-    SessionSummary, Tier, UserProgress, MAX_DETAILED_SESSIONS, SCHEMA_VERSION,
+    BestScore, KeyStroke, MAX_DETAILED_SESSIONS, SCHEMA_VERSION, SessionBucket, SessionKind,
+    SessionRecord, SessionSummary, Tier, UserProgress, day_index, schema_v1,
 };
 use serde::Deserialize;
 use std::fs;
@@ -193,11 +193,21 @@ impl ProgressRepository {
             if *passed {
                 progress.unlocked_tier = match (progress.unlocked_tier, *tier) {
                     (Tier::Tier1Foundation, Tier::Tier1Foundation) => Tier::Tier2FullAlphabet,
-                    (Tier::Tier2FullAlphabet, Tier::Tier2FullAlphabet) => Tier::Tier3SpanishOrthography,
-                    (Tier::Tier3SpanishOrthography, Tier::Tier3SpanishOrthography) => Tier::Tier4NumbersAndSymbols,
-                    (Tier::Tier4NumbersAndSymbols, Tier::Tier4NumbersAndSymbols) => Tier::Tier5SpeedAndCadence,
-                    (Tier::Tier5SpeedAndCadence, Tier::Tier5SpeedAndCadence) => Tier::Tier6AdvancedFluency,
-                    (Tier::Tier6AdvancedFluency, Tier::Tier6AdvancedFluency) => Tier::Tier7GrandMaster,
+                    (Tier::Tier2FullAlphabet, Tier::Tier2FullAlphabet) => {
+                        Tier::Tier3SpanishOrthography
+                    }
+                    (Tier::Tier3SpanishOrthography, Tier::Tier3SpanishOrthography) => {
+                        Tier::Tier4NumbersAndSymbols
+                    }
+                    (Tier::Tier4NumbersAndSymbols, Tier::Tier4NumbersAndSymbols) => {
+                        Tier::Tier5SpeedAndCadence
+                    }
+                    (Tier::Tier5SpeedAndCadence, Tier::Tier5SpeedAndCadence) => {
+                        Tier::Tier6AdvancedFluency
+                    }
+                    (Tier::Tier6AdvancedFluency, Tier::Tier6AdvancedFluency) => {
+                        Tier::Tier7GrandMaster
+                    }
                     (current, _) => current,
                 };
             }
@@ -634,8 +644,7 @@ mod tests {
     fn test_save_writes_via_tmp_file_never_truncating_target_on_write_failure() {
         let dir = tempdir().unwrap();
         let file_path = dir.path().join("progress.json");
-        let original =
-            r#"{"version":2,"completed_lessons":{},"unlocked_tier":"Tier1Foundation","total_practice_seconds":7,"key_stats":{}}"#;
+        let original = r#"{"version":2,"completed_lessons":{},"unlocked_tier":"Tier1Foundation","total_practice_seconds":7,"key_stats":{}}"#;
         fs::write(&file_path, original).unwrap();
 
         // Pre-occupy the atomic-write tmp path with a directory, so writing
@@ -681,9 +690,7 @@ mod tests {
             passed: true,
         };
 
-        let updated = repo
-            .record_session_result(kind, &summary, 38, &[])
-            .unwrap();
+        let updated = repo.record_session_result(kind, &summary, 38, &[]).unwrap();
 
         assert_eq!(updated.completed_lessons.len(), 1);
         assert_eq!(updated.unlocked_tier, Tier::Tier2FullAlphabet);
@@ -716,9 +723,7 @@ mod tests {
             passed: true,
         };
 
-        let updated = repo
-            .record_session_result(kind, &summary, 38, &[])
-            .unwrap();
+        let updated = repo.record_session_result(kind, &summary, 38, &[]).unwrap();
 
         assert_eq!(updated.sessions.len(), 1);
         assert_eq!(updated.sessions[0].duration_secs, 38);
@@ -744,8 +749,8 @@ mod tests {
     /// still add to `total_practice_seconds` and feed `key_stats`, while
     /// never creating a `completed_lessons` entry (that stays Lesson-only).
     #[test]
-    fn test_record_session_result_drill_accrues_practice_seconds_and_key_stats_no_completed_lessons(
-    ) {
+    fn test_record_session_result_drill_accrues_practice_seconds_and_key_stats_no_completed_lessons()
+     {
         let dir = tempdir().unwrap();
         let file_path = dir.path().join("progress.json");
         let repo = ProgressRepository::with_path(&file_path);
@@ -871,7 +876,10 @@ mod tests {
 
         apply_retention(&mut progress);
 
-        assert_eq!(progress.sessions.len(), crate::core::model::MAX_DETAILED_SESSIONS);
+        assert_eq!(
+            progress.sessions.len(),
+            crate::core::model::MAX_DETAILED_SESSIONS
+        );
         // The oldest record (index 0, completed_at 1_700_000_000) is gone
         // from the detail set; the next-oldest (index 1) is now the first.
         assert_eq!(progress.sessions[0].completed_at, 1_700_000_001);

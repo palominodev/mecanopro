@@ -246,7 +246,7 @@ mod tests {
     use super::*;
     use crate::core::model::{Tier, UserProgress};
     use crate::tui::app::App;
-    use crate::tui::planet_layout::{planet_layout, MenuRow};
+    use crate::tui::planet_layout::{MenuRow, planet_layout};
 
     fn key(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::NONE)

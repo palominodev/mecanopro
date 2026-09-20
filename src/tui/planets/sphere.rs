@@ -146,10 +146,8 @@ mod tests {
         }
         let hits = grid(15.0, 0.0).iter().filter(|cell| cell.is_some()).count();
         assert_eq!(hits, 37, "7×7 disc must hold the design's 37 cells");
-        for cell in grid(15.0, 0.5) {
-            if let Some(sample) = cell {
-                assert!(sample.r2 <= 1.0, "hit cells stay inside the radius");
-            }
+        for sample in grid(15.0, 0.5).into_iter().flatten() {
+            assert!(sample.r2 <= 1.0, "hit cells stay inside the radius");
         }
     }
 
@@ -185,17 +183,15 @@ mod tests {
 
     #[test]
     fn test_normals_are_unit_length_and_face_the_viewer() {
-        for cell in grid(30.0, 0.7) {
-            if let Some(sample) = cell {
-                assert!(
-                    (sample.normal.length() - 1.0).abs() < 1e-5,
-                    "normals must be unit length"
-                );
-                assert!(
-                    sample.normal.z >= 0.0,
-                    "only the front hemisphere is visible"
-                );
-            }
+        for sample in grid(30.0, 0.7).into_iter().flatten() {
+            assert!(
+                (sample.normal.length() - 1.0).abs() < 1e-5,
+                "normals must be unit length"
+            );
+            assert!(
+                sample.normal.z >= 0.0,
+                "only the front hemisphere is visible"
+            );
         }
     }
 

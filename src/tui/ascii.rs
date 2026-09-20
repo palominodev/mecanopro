@@ -9,7 +9,8 @@ impl AsciiArt {
         "█ ▀ █ ██▄ █▄▄ █▀█ █ ▀█ █▄█ █▀▀ █▀▄ █▄█",
     ];
 
-    pub const SUBTITLE: &'static str = "✦ SISTEMA DE NAVEGACIÓN TÁCTIL · MISIÓN ESPACIAL EN ESPAÑOL ✦";
+    pub const SUBTITLE: &'static str =
+        "✦ SISTEMA DE NAVEGACIÓN TÁCTIL · MISIÓN ESPACIAL EN ESPAÑOL ✦";
 
     /// Retro Rocket ASCII for Mission Passed
     pub const ROCKET_SUCCESS: [&'static str; 7] = [
@@ -266,9 +267,17 @@ mod tests {
             assert_eq!(frame.len(), 3, "warp frame {f} must be exactly 3 rows");
             for row in frame {
                 let w = UnicodeWidthStr::width(*row);
-                assert!(w <= 7, "warp frame {f} row '{row}' is {w} columns wide (>7)");
+                assert!(
+                    w <= 7,
+                    "warp frame {f} row '{row}' is {w} columns wide (>7)"
+                );
                 for ch in row.chars() {
-                    assert_eq!(ch.width(), Some(1), "warp frame {f} row: '{}' must have width 1", ch);
+                    assert_eq!(
+                        ch.width(),
+                        Some(1),
+                        "warp frame {f} row: '{}' must have width 1",
+                        ch
+                    );
                 }
             }
         }

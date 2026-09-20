@@ -53,11 +53,22 @@ fn test_end_to_end_spanish_typing_session() {
     };
 
     let updated_progress = repo
-        .record_session_result(kind, &summary, metrics.elapsed.as_secs(), &engine.keystrokes)
+        .record_session_result(
+            kind,
+            &summary,
+            metrics.elapsed.as_secs(),
+            &engine.keystrokes,
+        )
         .expect("Recording session must succeed");
 
     assert_eq!(updated_progress.completed_lessons.len(), 1);
-    assert!(updated_progress.completed_lessons.get(&lesson.id).unwrap().passed);
+    assert!(
+        updated_progress
+            .completed_lessons
+            .get(&lesson.id)
+            .unwrap()
+            .passed
+    );
     assert_eq!(updated_progress.unlocked_tier, Tier::Tier2FullAlphabet);
 }
 
@@ -151,7 +162,10 @@ fn test_legacy_progress_survives_lesson_and_dictation_completion_via_app() {
     let reloaded = ProgressRepository::with_path(&repo_path).load();
     assert_eq!(reloaded.completed_lessons.len(), 2);
     assert_eq!(reloaded.unlocked_tier, Tier::Tier2FullAlphabet);
-    assert_eq!(reloaded.total_practice_seconds, practice_seconds_after_lesson);
+    assert_eq!(
+        reloaded.total_practice_seconds,
+        practice_seconds_after_lesson
+    );
     assert_eq!(reloaded.sessions.len(), 2);
     assert_eq!(reloaded.version, mecanopro::core::model::SCHEMA_VERSION);
 }

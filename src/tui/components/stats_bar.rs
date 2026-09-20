@@ -1,11 +1,11 @@
 use crate::core::engine::TypingEngine;
 use crate::tui::theme::Theme;
 use ratatui::{
+    Frame,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Gauge, Paragraph},
-    Frame,
 };
 
 pub struct StatsBar;
@@ -31,12 +31,18 @@ impl StatsBar {
                 Span::styled("Velocidad: ", Style::default().fg(Theme::MUTED)),
                 Span::styled(
                     format!("{:.0} CPM", metrics.cpm),
-                    Style::default().fg(Theme::PRIMARY).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(Theme::PRIMARY)
+                        .add_modifier(Modifier::BOLD),
                 ),
             ]),
-            Line::from(vec![
-                Span::styled(format!("{:.1} WPM  ·  Meta: {:.0}", metrics.raw_wpm, engine.lesson.target_cpm), Style::default().fg(Theme::MUTED)),
-            ]),
+            Line::from(vec![Span::styled(
+                format!(
+                    "{:.1} WPM  ·  Meta: {:.0}",
+                    metrics.raw_wpm, engine.lesson.target_cpm
+                ),
+                Style::default().fg(Theme::MUTED),
+            )]),
         ];
         f.render_widget(
             Paragraph::new(cpm_span)
@@ -46,21 +52,29 @@ impl StatsBar {
         );
 
         // 2. Shields / Precision (Golden Rule)
-        let accuracy_color = if is_golden_valid { Theme::SUCCESS } else { Theme::ERROR };
+        let accuracy_color = if is_golden_valid {
+            Theme::SUCCESS
+        } else {
+            Theme::ERROR
+        };
         let accuracy_spans = vec![
             Line::from(vec![
                 Span::styled("Escudos: ", Style::default().fg(Theme::MUTED)),
                 Span::styled(
                     format!("{:.1}%", metrics.accuracy),
-                    Style::default().fg(accuracy_color).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(accuracy_color)
+                        .add_modifier(Modifier::BOLD),
                 ),
             ]),
-            Line::from(vec![
-                Span::styled(
-                    if is_golden_valid { "✓ Escudo Estable (≥96%)" } else { "⚠ Alerta: Requiere ≥96%" },
-                    Style::default().fg(accuracy_color),
-                ),
-            ]),
+            Line::from(vec![Span::styled(
+                if is_golden_valid {
+                    "✓ Escudo Estable (≥96%)"
+                } else {
+                    "⚠ Alerta: Requiere ≥96%"
+                },
+                Style::default().fg(accuracy_color),
+            )]),
         ];
         f.render_widget(
             Paragraph::new(accuracy_spans)
@@ -74,13 +88,20 @@ impl StatsBar {
             Line::from(vec![
                 Span::styled("Tiempo: ", Style::default().fg(Theme::MUTED)),
                 Span::styled(
-                    format!("{:02}:{:02}", metrics.elapsed.as_secs() / 60, metrics.elapsed.as_secs() % 60),
-                    Style::default().fg(Theme::TEXT).add_modifier(Modifier::BOLD),
+                    format!(
+                        "{:02}:{:02}",
+                        metrics.elapsed.as_secs() / 60,
+                        metrics.elapsed.as_secs() % 60
+                    ),
+                    Style::default()
+                        .fg(Theme::TEXT)
+                        .add_modifier(Modifier::BOLD),
                 ),
             ]),
-            Line::from(vec![
-                Span::styled(format!("Ritmo: {:.0}% sincro", metrics.consistency), Style::default().fg(Theme::NEBULA_PURPLE)),
-            ]),
+            Line::from(vec![Span::styled(
+                format!("Ritmo: {:.0}% sincro", metrics.consistency),
+                Style::default().fg(Theme::NEBULA_PURPLE),
+            )]),
         ];
         f.render_widget(
             Paragraph::new(time_spans)

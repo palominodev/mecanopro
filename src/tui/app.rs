@@ -6,7 +6,7 @@ use crate::core::metrics::MetricsCalculator;
 use crate::core::model::{Lesson, SessionKind, SessionMetrics, SessionSummary, Tier, UserProgress};
 use crate::storage::ProgressRepository;
 use crate::tui::animation::{ShipAnimation, ShipPhase};
-use crate::tui::planet_layout::{build_rows, MenuRow};
+use crate::tui::planet_layout::{MenuRow, build_rows};
 use std::time::{Duration, Instant};
 
 /// D10: env pin enabling reduced motion. Read exactly once per `App`
@@ -205,7 +205,9 @@ impl App {
     }
 
     pub fn selected_lesson(&self) -> Option<Lesson> {
-        self.available_lessons().get(self.selected_lesson_index).cloned()
+        self.available_lessons()
+            .get(self.selected_lesson_index)
+            .cloned()
     }
 
     pub fn start_practice(&mut self, lesson: Lesson) {
@@ -565,7 +567,8 @@ impl App {
 
         let mut engine = DictationEngine::new(words, config.clone());
         if let Some(first_word) = engine.current_word() {
-            self.tts_speaker.speak(first_word, config.speech_rate, config.current_voice_code());
+            self.tts_speaker
+                .speak(first_word, config.speech_rate, config.current_voice_code());
             engine.mark_audio_finished(Instant::now());
         }
 
@@ -579,7 +582,8 @@ impl App {
             let config = engine.config.clone();
             let mut new_engine = DictationEngine::new(words, config.clone());
             if let Some(first_word) = new_engine.current_word() {
-                self.tts_speaker.speak(first_word, config.speech_rate, config.current_voice_code());
+                self.tts_speaker
+                    .speak(first_word, config.speech_rate, config.current_voice_code());
                 new_engine.mark_audio_finished(Instant::now());
             }
             self.current_dictation = Some(new_engine);
@@ -638,11 +642,16 @@ impl App {
     pub fn adjust_dictation_speed(&mut self, delta: f32) {
         let (word, new_rate, voice) = match &mut self.current_dictation {
             Some(engine) => {
-                let new_rate = ((engine.config.speech_rate + delta).clamp(0.5, 2.0) * 10.0).round() / 10.0;
+                let new_rate =
+                    ((engine.config.speech_rate + delta).clamp(0.5, 2.0) * 10.0).round() / 10.0;
                 engine.config.speech_rate = new_rate;
                 engine.mark_audio_finished(Instant::now());
                 let voice = engine.config.current_voice_code().to_string();
-                (engine.current_word().map(|w| w.to_string()), new_rate, voice)
+                (
+                    engine.current_word().map(|w| w.to_string()),
+                    new_rate,
+                    voice,
+                )
             }
             None => (None, 1.0, "es_AR-daniela-high".to_string()),
         };
@@ -826,8 +835,10 @@ mod tests {
     #[test]
     fn test_all_conquered_planet_seven_still_enterable() {
         let mut app = App::new();
-        let mut progress = UserProgress::default();
-        progress.unlocked_tier = Tier::Tier7GrandMaster;
+        let mut progress = UserProgress {
+            unlocked_tier: Tier::Tier7GrandMaster,
+            ..Default::default()
+        };
         for lesson in Curriculum::all_lessons() {
             progress.completed_lessons.insert(
                 lesson.id.clone(),
@@ -1141,7 +1152,10 @@ mod tests {
 
         app.move_planet_right();
 
-        assert_eq!(app.ship.phase(), crate::tui::animation::ShipPhase::Traveling);
+        assert_eq!(
+            app.ship.phase(),
+            crate::tui::animation::ShipPhase::Traveling
+        );
         app.ship.complete();
         assert!((app.ship.position() - 1.0).abs() < 1e-5);
     }
@@ -1421,10 +1435,11 @@ mod tests {
             app.handle_key_input(ch);
         }
 
-        assert!(!app
-            .user_progress
-            .completed_lessons
-            .contains_key(Curriculum::ADAPTIVE_DRILL_ID));
+        assert!(
+            !app.user_progress
+                .completed_lessons
+                .contains_key(Curriculum::ADAPTIVE_DRILL_ID)
+        );
         assert_eq!(app.user_progress.sessions.len(), 1);
         assert!(matches!(
             app.user_progress.sessions[0].kind,
@@ -1448,10 +1463,7 @@ mod tests {
             app.handle_key_input(ch);
         }
 
-        assert!(app
-            .user_progress
-            .completed_lessons
-            .contains_key(&lesson.id));
+        assert!(app.user_progress.completed_lessons.contains_key(&lesson.id));
         assert_eq!(app.user_progress.sessions.len(), 1);
         assert!(matches!(
             app.user_progress.sessions[0].kind,
@@ -1467,8 +1479,8 @@ mod tests {
     /// Tier1 words are ASCII-only, so this drives the flow without needing
     /// dead-key composition.
     #[test]
-    fn test_dictation_completion_appends_record_updates_key_stats_leaves_practice_seconds_unchanged(
-    ) {
+    fn test_dictation_completion_appends_record_updates_key_stats_leaves_practice_seconds_unchanged()
+     {
         let dir = tempfile::tempdir().unwrap();
         let repo = ProgressRepository::with_path(dir.path().join("progress.json"));
         let mut app = App::with_repository(repo);
@@ -1592,8 +1604,6 @@ mod tests {
         app.return_to_star_map();
 
         assert!(app.ship.is_idle());
-        assert!(
-            (app.ship.position() - Tier::Tier5SpeedAndCadence.index() as f32).abs() < 1e-5
-        );
+        assert!((app.ship.position() - Tier::Tier5SpeedAndCadence.index() as f32).abs() < 1e-5);
     }
 }

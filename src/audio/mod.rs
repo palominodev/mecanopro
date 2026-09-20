@@ -1,7 +1,7 @@
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::mpsc::{channel, Sender};
+use std::sync::mpsc::{Sender, channel};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
@@ -60,8 +60,8 @@ impl SystemTtsSpeaker {
                             guard.clone()
                         };
 
-                        if let Some(children) =
-                            engine_opt.and_then(|e| Self::spawn_engine_processes(&e, &text, rate, &voice))
+                        if let Some(children) = engine_opt
+                            .and_then(|e| Self::spawn_engine_processes(&e, &text, rate, &voice))
                         {
                             active_children = children;
                         }

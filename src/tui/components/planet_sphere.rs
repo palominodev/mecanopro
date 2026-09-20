@@ -635,7 +635,7 @@ mod tests {
     fn map_card_tiers_paint_pairwise_distinct_rgb_sets() {
         let lane = Rect::new(0, 0, 12, 7);
         let mut sets: Vec<Vec<Color>> = Vec::new();
-        for tier in 0..7 {
+        for (tier, palette) in TIER_PALETTES.iter().enumerate() {
             let buf = draw_map_card(
                 20,
                 9,
@@ -649,7 +649,6 @@ mod tests {
             assert!(!painted.is_empty(), "tier {tier} must paint its lane");
 
             // Exactly the palette's two truecolor tones: day and night.
-            let palette = TIER_PALETTES[tier];
             let day = Color::Rgb(palette.primary.r, palette.primary.g, palette.primary.b);
             let night = Color::Rgb(
                 palette.secondary.r,
@@ -825,10 +824,10 @@ mod tests {
         let mut found = Vec::new();
         for y in rect.y..rect.y + rect.height {
             for x in rect.x..rect.x + rect.width {
-                if let Some(cell) = buf.cell(Position::new(x, y)) {
-                    if cell.symbol().chars().next() == Some(glyph) {
-                        found.push((x, y));
-                    }
+                if let Some(cell) = buf.cell(Position::new(x, y))
+                    && cell.symbol().starts_with(glyph)
+                {
+                    found.push((x, y));
                 }
             }
         }

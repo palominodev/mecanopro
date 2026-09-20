@@ -35,67 +35,84 @@ impl Curriculum {
                 id: "fila-guia".into(),
                 title: "Fila guía".into(),
                 tier: Tier::Tier1Foundation,
-                description: "Posición base ASDF · JKLÑ con ejercicios progresivos sobre la fila central.".into(),
+                description:
+                    "Posición base ASDF · JKLÑ con ejercicios progresivos sobre la fila central."
+                        .into(),
             },
             Section {
                 id: "fila-superior".into(),
                 title: "Fila superior".into(),
                 tier: Tier::Tier2FullAlphabet,
-                description: "Extensión del alcance a la fila superior para completar la mitad del alfabeto.".into(),
+                description:
+                    "Extensión del alcance a la fila superior para completar la mitad del alfabeto."
+                        .into(),
             },
             Section {
                 id: "fila-inferior".into(),
                 title: "Fila inferior".into(),
                 tier: Tier::Tier2FullAlphabet,
-                description: "Extensión del alcance a la fila inferior para completar todo el alfabeto.".into(),
+                description:
+                    "Extensión del alcance a la fila inferior para completar todo el alfabeto."
+                        .into(),
             },
             Section {
                 id: "caracteres-acentuados".into(),
                 title: "Caracteres acentuados".into(),
                 tier: Tier::Tier3SpanishOrthography,
-                description: "Acentos, eñe y diéresis mediante teclas muertas de la ortografía española.".into(),
+                description:
+                    "Acentos, eñe y diéresis mediante teclas muertas de la ortografía española."
+                        .into(),
             },
             Section {
                 id: "nivel-basico-1".into(),
                 title: "Nivel básico 1".into(),
                 tier: Tier::Tier3SpanishOrthography,
-                description: "Primer nivel básico: palabras sencillas que consolidan las letras aprendidas.".into(),
+                description:
+                    "Primer nivel básico: palabras sencillas que consolidan las letras aprendidas."
+                        .into(),
             },
             Section {
                 id: "palabras-desafiantes-1".into(),
                 title: "Palabras desafiantes 1".into(),
                 tier: Tier::Tier3SpanishOrthography,
-                description: "Ronda de palabras exigentes sobre las combinaciones con mayor tasa de error.".into(),
+                description:
+                    "Ronda de palabras exigentes sobre las combinaciones con mayor tasa de error."
+                        .into(),
             },
             Section {
                 id: "mayusculas".into(),
                 title: "Mayúsculas".into(),
                 tier: Tier::Tier3SpanishOrthography,
-                description: "Uso fluido de Shift para mayúsculas y signos de puntuación española.".into(),
+                description: "Uso fluido de Shift para mayúsculas y signos de puntuación española."
+                    .into(),
             },
             Section {
                 id: "patrones-comunes-1".into(),
                 title: "Patrones comunes 1".into(),
                 tier: Tier::Tier3SpanishOrthography,
-                description: "Secuencias y dígrafos frecuentes del español para ganar agilidad.".into(),
+                description: "Secuencias y dígrafos frecuentes del español para ganar agilidad."
+                    .into(),
             },
             Section {
                 id: "nivel-basico-2".into(),
                 title: "Nivel básico 2".into(),
                 tier: Tier::Tier3SpanishOrthography,
-                description: "Segundo nivel básico: frases sencillas usando todo el alfabeto.".into(),
+                description: "Segundo nivel básico: frases sencillas usando todo el alfabeto."
+                    .into(),
             },
             Section {
                 id: "palabras-desafiantes-2".into(),
                 title: "Palabras desafiantes 2".into(),
                 tier: Tier::Tier3SpanishOrthography,
-                description: "Nueva ronda de palabras exigentes sobre el repertorio acumulado.".into(),
+                description: "Nueva ronda de palabras exigentes sobre el repertorio acumulado."
+                    .into(),
             },
             Section {
                 id: "numeros".into(),
                 title: "Números".into(),
                 tier: Tier::Tier4NumbersAndSymbols,
-                description: "Alcance vertical a la fila numérica superior con precisión sostenida.".into(),
+                description:
+                    "Alcance vertical a la fila numérica superior con precisión sostenida.".into(),
             },
             Section {
                 id: "patrones-comunes-2".into(),
@@ -107,13 +124,15 @@ impl Curriculum {
                 id: "nivel-basico-3".into(),
                 title: "Nivel básico 3".into(),
                 tier: Tier::Tier4NumbersAndSymbols,
-                description: "Tercer nivel básico: textos cortos que mezclan letras y números.".into(),
+                description: "Tercer nivel básico: textos cortos que mezclan letras y números."
+                    .into(),
             },
             Section {
                 id: "simbolos".into(),
                 title: "Símbolos".into(),
                 tier: Tier::Tier4NumbersAndSymbols,
-                description: "Operadores, delimitadores y sintaxis esencial de programación.".into(),
+                description: "Operadores, delimitadores y sintaxis esencial de programación."
+                    .into(),
             },
             Section {
                 id: "patrones-comunes-3".into(),
@@ -125,7 +144,9 @@ impl Curriculum {
                 id: "nivel-avanzado-1".into(),
                 title: "Nivel avanzado 1".into(),
                 tier: Tier::Tier5SpeedAndCadence,
-                description: "Primer nivel avanzado: ritmo y cadencia rumbo a la velocidad de crucero.".into(),
+                description:
+                    "Primer nivel avanzado: ritmo y cadencia rumbo a la velocidad de crucero."
+                        .into(),
             },
             Section {
                 id: "mas-simbolos".into(),
@@ -143,13 +164,15 @@ impl Curriculum {
                 id: "nivel-avanzado-3".into(),
                 title: "Nivel avanzado 3".into(),
                 tier: Tier::Tier6AdvancedFluency,
-                description: "Prosa literaria y resistencia motriz sostenida a alta velocidad.".into(),
+                description: "Prosa literaria y resistencia motriz sostenida a alta velocidad."
+                    .into(),
             },
             Section {
                 id: "nivel-avanzado-4".into(),
                 title: "Nivel avanzado 4".into(),
                 tier: Tier::Tier6AdvancedFluency,
-                description: "Cuarto nivel avanzado: fluidez y resistencia en textos exigentes.".into(),
+                description: "Cuarto nivel avanzado: fluidez y resistencia en textos exigentes."
+                    .into(),
             },
             Section {
                 id: "nivel-avanzado-5".into(),
@@ -2405,7 +2428,11 @@ impl Curriculum {
         let mut words = Vec::new();
 
         for _ in 0..15 {
-            let len = (3..=6).collect::<Vec<_>>().choose(&mut rng).copied().unwrap_or(4);
+            let len = (3..=6)
+                .collect::<Vec<_>>()
+                .choose(&mut rng)
+                .copied()
+                .unwrap_or(4);
             let word: String = (0..len)
                 .map(|_| *keys.choose(&mut rng).unwrap_or(&'a'))
                 .collect();
@@ -2421,7 +2448,9 @@ impl Curriculum {
             // Dynamic drills are not part of the ordered curriculum, so they
             // belong to no section.
             section_id: String::new(),
-            description: "Ejercicio generado dinámicamente enfocado en tus teclas con mayor tasa de error.".into(),
+            description:
+                "Ejercicio generado dinámicamente enfocado en tus teclas con mayor tasa de error."
+                    .into(),
             text: drill_text,
             target_cpm: 300.0,
             min_accuracy: 96.0,
@@ -2431,36 +2460,90 @@ impl Curriculum {
     pub fn dictation_word_pool(tier: Tier) -> &'static [&'static str] {
         match tier {
             Tier::Tier1Foundation => &[
-                "casa", "sala", "falda", "sello", "dedo", "soda", "fosa", "dado", "salsa",
-                "lado", "sola", "ala", "hada", "lana", "calle", "mesa", "paso", "mapa",
+                "casa", "sala", "falda", "sello", "dedo", "soda", "fosa", "dado", "salsa", "lado",
+                "sola", "ala", "hada", "lana", "calle", "mesa", "paso", "mapa",
             ],
             Tier::Tier2FullAlphabet => &[
-                "tiempo", "mundo", "barco", "noche", "perro", "playa", "fuego", "viento",
-                "bosque", "verde", "campo", "camino", "puente", "hombre", "madre", "padre",
-                "piedra", "libro", "fuerza", "ciudad", "tarde", "amigo", "suerte", "tierra",
+                "tiempo", "mundo", "barco", "noche", "perro", "playa", "fuego", "viento", "bosque",
+                "verde", "campo", "camino", "puente", "hombre", "madre", "padre", "piedra",
+                "libro", "fuerza", "ciudad", "tarde", "amigo", "suerte", "tierra",
             ],
             Tier::Tier3SpanishOrthography => &[
-                "árbol", "música", "rápido", "canción", "corazón", "difícil", "llegó", "año",
-                "mañana", "niño", "sueño", "pingüino", "cigüeña", "vergüenza", "último", "inglés",
-                "café", "azúcar", "fácil", "león", "avión", "también", "además", "señal",
+                "árbol",
+                "música",
+                "rápido",
+                "canción",
+                "corazón",
+                "difícil",
+                "llegó",
+                "año",
+                "mañana",
+                "niño",
+                "sueño",
+                "pingüino",
+                "cigüeña",
+                "vergüenza",
+                "último",
+                "inglés",
+                "café",
+                "azúcar",
+                "fácil",
+                "león",
+                "avión",
+                "también",
+                "además",
+                "señal",
             ],
             Tier::Tier4NumbersAndSymbols => &[
-                "fn_total", "calc_100", "data_id", "idx_0", "val_2026", "port_8080",
-                "ret_true", "get_item", "max_len", "sum_val", "cfg_init", "iter_next",
+                "fn_total",
+                "calc_100",
+                "data_id",
+                "idx_0",
+                "val_2026",
+                "port_8080",
+                "ret_true",
+                "get_item",
+                "max_len",
+                "sum_val",
+                "cfg_init",
+                "iter_next",
             ],
             Tier::Tier5SpeedAndCadence => &[
-                "siempre", "tiempo", "grande", "nuevo", "primer", "ultimo", "trabajo",
-                "estado", "pueblo", "manera", "forma", "punto", "mundo", "sentir", "pensar",
+                "siempre", "tiempo", "grande", "nuevo", "primer", "ultimo", "trabajo", "estado",
+                "pueblo", "manera", "forma", "punto", "mundo", "sentir", "pensar",
             ],
             Tier::Tier6AdvancedFluency => &[
-                "inconmensurable", "extraordinario", "laberinto", "resplandor", "maravilla",
-                "crepúsculo", "universo", "infinito", "metamorfosis", "imaginación",
+                "inconmensurable",
+                "extraordinario",
+                "laberinto",
+                "resplandor",
+                "maravilla",
+                "crepúsculo",
+                "universo",
+                "infinito",
+                "metamorfosis",
+                "imaginación",
             ],
             Tier::Tier7GrandMaster => &[
-                "arquitectura", "transformación", "persistencia", "extraordinario",
-                "conocimiento", "claridad", "pensamiento", "naturaleza", "disciplina",
-                "sensibilidad", "revolución", "equilibrio", "constancia", "fundamento",
-                "aprendizaje", "experiencia", "invariable", "perspectiva", "horizonte",
+                "arquitectura",
+                "transformación",
+                "persistencia",
+                "extraordinario",
+                "conocimiento",
+                "claridad",
+                "pensamiento",
+                "naturaleza",
+                "disciplina",
+                "sensibilidad",
+                "revolución",
+                "equilibrio",
+                "constancia",
+                "fundamento",
+                "aprendizaje",
+                "experiencia",
+                "invariable",
+                "perspectiva",
+                "horizonte",
             ],
         }
     }
@@ -2556,8 +2639,15 @@ mod tests {
         let progress = UserProgress::default();
         let all = Curriculum::all_tier_progress(&progress);
 
-        assert_eq!(all[0].status, PlanetStatus::Current, "Tier1 must be the current frontier");
-        assert_eq!(all[0].passed, 0, "no lesson has been passed on a fresh install");
+        assert_eq!(
+            all[0].status,
+            PlanetStatus::Current,
+            "Tier1 must be the current frontier"
+        );
+        assert_eq!(
+            all[0].passed, 0,
+            "no lesson has been passed on a fresh install"
+        );
         for tp in &all[1..] {
             assert_eq!(
                 tp.status,
@@ -2630,7 +2720,11 @@ mod tests {
     #[test]
     fn test_tier1_and_tier2_coverage() {
         let t1 = Curriculum::lessons_for_tier(Tier::Tier1Foundation);
-        assert_eq!(t1.len(), 21, "Tier 1 should have 21 lessons (including isolated pairs, unilateral drills, and expanded home row fluency)");
+        assert_eq!(
+            t1.len(),
+            21,
+            "Tier 1 should have 21 lessons (including isolated pairs, unilateral drills, and expanded home row fluency)"
+        );
         // t1-l1 must have f, j and space
         assert!(t1[0].text.contains('f') && t1[0].text.contains('j') && t1[0].text.contains(' '));
 
@@ -2944,12 +3038,21 @@ mod tests {
 
         // t2-l15 practices q combinations.
         let l15 = Curriculum::find_lesson("t2-l15").expect("t2-l15 must exist");
-        assert!(l15.text.contains('q'), "Lesson t2-l15 must practice the 'q' key");
+        assert!(
+            l15.text.contains('q'),
+            "Lesson t2-l15 must practice the 'q' key"
+        );
 
         // t2-l16 reinforces the weak keys w and y.
         let l16 = Curriculum::find_lesson("t2-l16").expect("t2-l16 must exist");
-        assert!(l16.text.contains('w'), "Lesson t2-l16 must practice the 'w' key");
-        assert!(l16.text.contains('y'), "Lesson t2-l16 must practice the 'y' key");
+        assert!(
+            l16.text.contains('w'),
+            "Lesson t2-l16 must practice the 'w' key"
+        );
+        assert!(
+            l16.text.contains('y'),
+            "Lesson t2-l16 must practice the 'y' key"
+        );
 
         // t2-l23 integrates the comma into real words.
         let l23 = Curriculum::find_lesson("t2-l23").expect("t2-l23 must exist");
@@ -2988,7 +3091,10 @@ mod tests {
 
         // t2-l34 practices challenging words built around the x key.
         let l34 = Curriculum::find_lesson("t2-l34").expect("t2-l34 must exist");
-        assert!(l34.text.contains('x'), "Lesson t2-l34 must practice the 'x' key");
+        assert!(
+            l34.text.contains('x'),
+            "Lesson t2-l34 must practice the 'x' key"
+        );
     }
 
     #[test]
@@ -3106,10 +3212,8 @@ mod tests {
         // Batch A rows: t3-l1..t3-l28 must stay free of capitals and ¿?¡!:;.
         const CAPITALS_FORBIDDEN_ROWS: usize = 28;
 
-        for (idx, (lesson, (expected_id, chars, adds_uppercase))) in section
-            .iter()
-            .zip(introduced.iter())
-            .enumerate()
+        for (idx, (lesson, (expected_id, chars, adds_uppercase))) in
+            section.iter().zip(introduced.iter()).enumerate()
         {
             assert_eq!(
                 lesson.id, *expected_id,
@@ -3166,14 +3270,29 @@ mod tests {
         // t3-l8 introduces the diaeresis and keeps the ñ in play
         // (moved "Ñ y Diéresis" lesson from the original tier3 layout).
         let l8 = Curriculum::find_lesson("t3-l8").expect("t3-l8 must exist");
-        assert!(l8.text.contains('ü'), "Lesson t3-l8 must introduce diaeresis 'ü'");
-        assert!(l8.text.contains('ñ'), "Lesson t3-l8 must keep practicing 'ñ'");
+        assert!(
+            l8.text.contains('ü'),
+            "Lesson t3-l8 must introduce diaeresis 'ü'"
+        );
+        assert!(
+            l8.text.contains('ñ'),
+            "Lesson t3-l8 must keep practicing 'ñ'"
+        );
 
         // t3-l29 introduces capitals (Shift) and the full Spanish punctuation set.
         let l29 = Curriculum::find_lesson("t3-l29").expect("t3-l29 must exist");
-        assert!(l29.text.contains('¿'), "Lesson t3-l29 must use opening question '¿'");
-        assert!(l29.text.contains('¡'), "Lesson t3-l29 must use opening exclamation '¡'");
-        assert!(l29.text.contains(';'), "Lesson t3-l29 must use punto y coma ';'");
+        assert!(
+            l29.text.contains('¿'),
+            "Lesson t3-l29 must use opening question '¿'"
+        );
+        assert!(
+            l29.text.contains('¡'),
+            "Lesson t3-l29 must use opening exclamation '¡'"
+        );
+        assert!(
+            l29.text.contains(';'),
+            "Lesson t3-l29 must use punto y coma ';'"
+        );
         assert!(
             l29.text.chars().any(|c| c.is_ascii_uppercase()),
             "Lesson t3-l29 must introduce capital letters via Shift"
@@ -3201,10 +3320,14 @@ mod tests {
     #[test]
     fn test_section3_batch_a_positive_checks() {
         // Per-vowel tilde lessons focus on their own vowel.
-        for (id, ch) in [("t3-l2", 'á'), ("t3-l3", 'é'), ("t3-l4", 'í'), ("t3-l5", 'ó'), ("t3-l6", 'ú')]
-        {
-            let lesson = Curriculum::find_lesson(id)
-                .unwrap_or_else(|| panic!("{id} must exist"));
+        for (id, ch) in [
+            ("t3-l2", 'á'),
+            ("t3-l3", 'é'),
+            ("t3-l4", 'í'),
+            ("t3-l5", 'ó'),
+            ("t3-l6", 'ú'),
+        ] {
+            let lesson = Curriculum::find_lesson(id).unwrap_or_else(|| panic!("{id} must exist"));
             assert!(
                 lesson.text.contains(ch),
                 "Lesson {id} must practice the accented vowel '{ch}'"
@@ -3216,26 +3339,43 @@ mod tests {
         // tilde, so "a word with >=2 tildes" is impossible within this charset.)
         let l7 = Curriculum::find_lesson("t3-l7").expect("t3-l7 must exist");
         assert!(
-            l7.text.split_whitespace().all(|w| w.chars().any(|c| "áéíóú".contains(c))),
+            l7.text
+                .split_whitespace()
+                .all(|w| w.chars().any(|c| "áéíóú".contains(c))),
             "Lesson t3-l7 must be tilde-dense: every word carries a tilde, got: {}",
             l7.text
         );
 
         // t3-l9 drills the diaeresis intensively.
         let l9 = Curriculum::find_lesson("t3-l9").expect("t3-l9 must exist");
-        assert!(l9.text.contains('ü'), "Lesson t3-l9 must drill the diaeresis 'ü'");
+        assert!(
+            l9.text.contains('ü'),
+            "Lesson t3-l9 must drill the diaeresis 'ü'"
+        );
 
         // t3-l25 trains the diacritic accent with its canonical pairs.
         let l25 = Curriculum::find_lesson("t3-l25").expect("t3-l25 must exist");
         let words25: std::collections::HashSet<&str> = l25.text.split_whitespace().collect();
-        assert!(words25.contains("tú"), "Lesson t3-l25 must use diacritic 'tú'");
-        assert!(words25.contains("él"), "Lesson t3-l25 must use diacritic 'él'");
+        assert!(
+            words25.contains("tú"),
+            "Lesson t3-l25 must use diacritic 'tú'"
+        );
+        assert!(
+            words25.contains("él"),
+            "Lesson t3-l25 must use diacritic 'él'"
+        );
 
         // t3-l26 trains homophones with its canonical pair.
         let l26 = Curriculum::find_lesson("t3-l26").expect("t3-l26 must exist");
         let words26: std::collections::HashSet<&str> = l26.text.split_whitespace().collect();
-        assert!(words26.contains("hola"), "Lesson t3-l26 must include homophone 'hola'");
-        assert!(words26.contains("ola"), "Lesson t3-l26 must include homophone 'ola'");
+        assert!(
+            words26.contains("hola"),
+            "Lesson t3-l26 must include homophone 'hola'"
+        );
+        assert!(
+            words26.contains("ola"),
+            "Lesson t3-l26 must include homophone 'ola'"
+        );
     }
 
     /// Batch B positive checks: the new tier3 lessons must actually exercise
@@ -3378,7 +3518,10 @@ mod tests {
             ("t4-l26", &[]),
             ("t4-l27", &[]),
             ("t4-l28", &[]),
-            ("t4-l29", &['+', '-', '*', '/', '=', '<', '>', '%', '(', ')']),
+            (
+                "t4-l29",
+                &['+', '-', '*', '/', '=', '<', '>', '%', '(', ')'],
+            ),
             ("t4-l30", &['{', '}', '[', ']', '_', '&', '|', '$', '"']),
             ("t4-l31", &[]),
             ("t4-l32", &[]),
@@ -3416,8 +3559,7 @@ mod tests {
         // free of reserved symbols.
         const PRE_SIMBOLOS_LEN: usize = 28;
 
-        for (idx, (lesson, (expected_id, chars))) in
-            tier4.iter().zip(introduced.iter()).enumerate()
+        for (idx, (lesson, (expected_id, chars))) in tier4.iter().zip(introduced.iter()).enumerate()
         {
             assert_eq!(
                 lesson.id, *expected_id,
@@ -3457,13 +3599,25 @@ mod tests {
             .split_whitespace()
             .map(|w| w.trim_matches(|c: char| !c.is_alphanumeric()).to_string())
             .collect();
-        assert!(words59.contains("haya"), "Lesson t3-l59 must include homophone 'haya'");
-        assert!(words59.contains("aya"), "Lesson t3-l59 must include homophone 'aya'");
+        assert!(
+            words59.contains("haya"),
+            "Lesson t3-l59 must include homophone 'haya'"
+        );
+        assert!(
+            words59.contains("aya"),
+            "Lesson t3-l59 must include homophone 'aya'"
+        );
 
         // t3-l60 practices the diacritic tilde in context.
         let l60 = Curriculum::find_lesson("t3-l60").expect("t3-l60 must exist");
-        assert!(l60.text.contains("él"), "Lesson t3-l60 must practice diacritic 'él'");
-        assert!(l60.text.contains("tú"), "Lesson t3-l60 must practice diacritic 'tú'");
+        assert!(
+            l60.text.contains("él"),
+            "Lesson t3-l60 must practice diacritic 'él'"
+        );
+        assert!(
+            l60.text.contains("tú"),
+            "Lesson t3-l60 must practice diacritic 'tú'"
+        );
 
         // t3-l63 drills the classic tongue twister.
         let l63 = Curriculum::find_lesson("t3-l63").expect("t3-l63 must exist");
@@ -3474,7 +3628,10 @@ mod tests {
 
         // t4-l5 drills historical years.
         let t4_l5 = Curriculum::find_lesson("t4-l5").expect("t4-l5 must exist");
-        assert!(t4_l5.text.contains("2026"), "Lesson t4-l5 must include the year '2026'");
+        assert!(
+            t4_l5.text.contains("2026"),
+            "Lesson t4-l5 must include the year '2026'"
+        );
 
         // t4-l9 mixes digits and words in the same sentence.
         let t4_l9 = Curriculum::find_lesson("t4-l9").expect("t4-l9 must exist");
@@ -3527,13 +3684,25 @@ mod tests {
 
         // t4-l34 drills the euro and pound currency signs.
         let l34 = Curriculum::find_lesson("t4-l34").expect("t4-l34 must exist");
-        assert!(l34.text.contains('€'), "Lesson t4-l34 must drill the euro '€'");
-        assert!(l34.text.contains('£'), "Lesson t4-l34 must drill the pound '£'");
+        assert!(
+            l34.text.contains('€'),
+            "Lesson t4-l34 must drill the euro '€'"
+        );
+        assert!(
+            l34.text.contains('£'),
+            "Lesson t4-l34 must drill the pound '£'"
+        );
 
         // t4-l35 drills the at-sign and the hash.
         let l35 = Curriculum::find_lesson("t4-l35").expect("t4-l35 must exist");
-        assert!(l35.text.contains('@'), "Lesson t4-l35 must drill the at-sign '@'");
-        assert!(l35.text.contains('#'), "Lesson t4-l35 must drill the hash '#'");
+        assert!(
+            l35.text.contains('@'),
+            "Lesson t4-l35 must drill the at-sign '@'"
+        );
+        assert!(
+            l35.text.contains('#'),
+            "Lesson t4-l35 must drill the hash '#'"
+        );
 
         // t4-l37 drills the Spanish angular quotes.
         let l37 = Curriculum::find_lesson("t4-l37").expect("t4-l37 must exist");
@@ -3577,24 +3746,80 @@ mod tests {
             ("fila-guia", "Fila guía", Tier::Tier1Foundation),
             ("fila-superior", "Fila superior", Tier::Tier2FullAlphabet),
             ("fila-inferior", "Fila inferior", Tier::Tier2FullAlphabet),
-            ("caracteres-acentuados", "Caracteres acentuados", Tier::Tier3SpanishOrthography),
-            ("nivel-basico-1", "Nivel básico 1", Tier::Tier3SpanishOrthography),
-            ("palabras-desafiantes-1", "Palabras desafiantes 1", Tier::Tier3SpanishOrthography),
+            (
+                "caracteres-acentuados",
+                "Caracteres acentuados",
+                Tier::Tier3SpanishOrthography,
+            ),
+            (
+                "nivel-basico-1",
+                "Nivel básico 1",
+                Tier::Tier3SpanishOrthography,
+            ),
+            (
+                "palabras-desafiantes-1",
+                "Palabras desafiantes 1",
+                Tier::Tier3SpanishOrthography,
+            ),
             ("mayusculas", "Mayúsculas", Tier::Tier3SpanishOrthography),
-            ("patrones-comunes-1", "Patrones comunes 1", Tier::Tier3SpanishOrthography),
-            ("nivel-basico-2", "Nivel básico 2", Tier::Tier3SpanishOrthography),
-            ("palabras-desafiantes-2", "Palabras desafiantes 2", Tier::Tier3SpanishOrthography),
+            (
+                "patrones-comunes-1",
+                "Patrones comunes 1",
+                Tier::Tier3SpanishOrthography,
+            ),
+            (
+                "nivel-basico-2",
+                "Nivel básico 2",
+                Tier::Tier3SpanishOrthography,
+            ),
+            (
+                "palabras-desafiantes-2",
+                "Palabras desafiantes 2",
+                Tier::Tier3SpanishOrthography,
+            ),
             ("numeros", "Números", Tier::Tier4NumbersAndSymbols),
-            ("patrones-comunes-2", "Patrones comunes 2", Tier::Tier4NumbersAndSymbols),
-            ("nivel-basico-3", "Nivel básico 3", Tier::Tier4NumbersAndSymbols),
+            (
+                "patrones-comunes-2",
+                "Patrones comunes 2",
+                Tier::Tier4NumbersAndSymbols,
+            ),
+            (
+                "nivel-basico-3",
+                "Nivel básico 3",
+                Tier::Tier4NumbersAndSymbols,
+            ),
             ("simbolos", "Símbolos", Tier::Tier4NumbersAndSymbols),
-            ("patrones-comunes-3", "Patrones comunes 3", Tier::Tier4NumbersAndSymbols),
-            ("nivel-avanzado-1", "Nivel avanzado 1", Tier::Tier5SpeedAndCadence),
+            (
+                "patrones-comunes-3",
+                "Patrones comunes 3",
+                Tier::Tier4NumbersAndSymbols,
+            ),
+            (
+                "nivel-avanzado-1",
+                "Nivel avanzado 1",
+                Tier::Tier5SpeedAndCadence,
+            ),
             ("mas-simbolos", "Más símbolos", Tier::Tier5SpeedAndCadence),
-            ("nivel-avanzado-2", "Nivel avanzado 2", Tier::Tier5SpeedAndCadence),
-            ("nivel-avanzado-3", "Nivel avanzado 3", Tier::Tier6AdvancedFluency),
-            ("nivel-avanzado-4", "Nivel avanzado 4", Tier::Tier6AdvancedFluency),
-            ("nivel-avanzado-5", "Nivel avanzado 5", Tier::Tier7GrandMaster),
+            (
+                "nivel-avanzado-2",
+                "Nivel avanzado 2",
+                Tier::Tier5SpeedAndCadence,
+            ),
+            (
+                "nivel-avanzado-3",
+                "Nivel avanzado 3",
+                Tier::Tier6AdvancedFluency,
+            ),
+            (
+                "nivel-avanzado-4",
+                "Nivel avanzado 4",
+                Tier::Tier6AdvancedFluency,
+            ),
+            (
+                "nivel-avanzado-5",
+                "Nivel avanzado 5",
+                Tier::Tier7GrandMaster,
+            ),
         ];
 
         let sections = Curriculum::all_sections();
@@ -3617,10 +3842,8 @@ mod tests {
         use std::collections::HashMap;
 
         let sections = Curriculum::all_sections();
-        let section_tiers: HashMap<&str, Tier> = sections
-            .iter()
-            .map(|s| (s.id.as_str(), s.tier))
-            .collect();
+        let section_tiers: HashMap<&str, Tier> =
+            sections.iter().map(|s| (s.id.as_str(), s.tier)).collect();
 
         for lesson in Curriculum::all_lessons() {
             let section_tier = section_tiers
@@ -3721,8 +3944,7 @@ mod tests {
         // t7-l1..l3 texts must stay byte-identical and are shorter than
         // these floors, so the floors apply to the Batch D lessons only.
         let word_count = |id: &str| -> usize {
-            let lesson = Curriculum::find_lesson(id)
-                .unwrap_or_else(|| panic!("{id} must exist"));
+            let lesson = Curriculum::find_lesson(id).unwrap_or_else(|| panic!("{id} must exist"));
             lesson.text.split_whitespace().count()
         };
 

@@ -304,7 +304,10 @@ impl DictationEngine {
                 let sum: f64 = reaction_ms.iter().sum();
                 let avg = sum / reaction_ms.len() as f64;
                 let min = reaction_ms.iter().copied().fold(f64::INFINITY, f64::min);
-                let max = reaction_ms.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+                let max = reaction_ms
+                    .iter()
+                    .copied()
+                    .fold(f64::NEG_INFINITY, f64::max);
                 (avg, min, max)
             } else {
                 (0.0, 0.0, 0.0)

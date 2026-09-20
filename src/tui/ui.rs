@@ -1,5 +1,5 @@
-use crate::core::model::{Lesson, PlanetStatus, SessionKind, SessionRecord, Tier};
 use crate::core::Curriculum;
+use crate::core::model::{Lesson, PlanetStatus, SessionKind, SessionRecord, Tier};
 use crate::tui::animation::ShipPhase;
 use crate::tui::app::{App, CurrentView};
 use crate::tui::ascii::AsciiArt;
@@ -12,14 +12,14 @@ use crate::tui::planet_layout::{
     ship_gutter, ship_x, ship_y, sprite_lane,
 };
 use crate::tui::theme::Theme;
-    use ratatui::{
-        layout::{Alignment, Constraint, Direction, Layout, Rect},
-        style::{Color, Modifier, Style},
-        text::{Line, Span},
-        widgets::{Paragraph, Wrap},
-        Frame,
-    };
-    use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+use ratatui::{
+    Frame,
+    layout::{Alignment, Constraint, Direction, Layout, Rect},
+    style::{Color, Modifier, Style},
+    text::{Line, Span},
+    widgets::{Paragraph, Wrap},
+};
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 /// Maps a [`PlanetStatus`] to its galaxy-map glyph, colour, and Spanish
 /// status badge. Colour is never the sole indicator: the glyph and badge
@@ -39,8 +39,15 @@ pub fn render(f: &mut Frame, app: &App) {
         CurrentView::Practice => render_practice(f, app),
         CurrentView::Summary => {
             render_practice(f, app);
-            if let (Some(engine), Some(metrics)) = (&app.current_engine, &app.last_session_metrics) {
-                SummaryModal::render(f, f.area(), &engine.lesson, metrics, app.last_session_passed);
+            if let (Some(engine), Some(metrics)) = (&app.current_engine, &app.last_session_metrics)
+            {
+                SummaryModal::render(
+                    f,
+                    f.area(),
+                    &engine.lesson,
+                    metrics,
+                    app.last_session_passed,
+                );
             }
         }
         CurrentView::Stats => render_stats(f, app),
@@ -89,23 +96,40 @@ fn render_header(f: &mut Frame, area: Rect) {
     let header_lines = vec![
         Line::from(Span::styled(
             AsciiArt::LOGO_LINES[0],
-            Style::default().fg(Theme::PRIMARY).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Theme::PRIMARY)
+                .add_modifier(Modifier::BOLD),
         )),
         Line::from(Span::styled(
             AsciiArt::LOGO_LINES[1],
-            Style::default().fg(Theme::SECONDARY).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Theme::SECONDARY)
+                .add_modifier(Modifier::BOLD),
         )),
         Line::from(Span::styled(
             AsciiArt::SUBTITLE,
-            Style::default().fg(Theme::NEBULA_PURPLE).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Theme::NEBULA_PURPLE)
+                .add_modifier(Modifier::BOLD),
         )),
         Line::from(vec![
-            Span::styled("✦ REGLA DE ORO ESTELAR: ", Style::default().fg(Theme::ACCENT).add_modifier(Modifier::BOLD)),
-            Span::styled("Precisión obligatoria ≥ 96% para desbloquear sectores de navegación estelar", Style::default().fg(Theme::TEXT)),
+            Span::styled(
+                "✦ REGLA DE ORO ESTELAR: ",
+                Style::default()
+                    .fg(Theme::ACCENT)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                "Precisión obligatoria ≥ 96% para desbloquear sectores de navegación estelar",
+                Style::default().fg(Theme::TEXT),
+            ),
         ]),
     ];
     let header = Paragraph::new(header_lines)
-        .block(Theme::retro_block("COMANDO CENTRAL :: MECANOPRO", Theme::PRIMARY))
+        .block(Theme::retro_block(
+            "COMANDO CENTRAL :: MECANOPRO",
+            Theme::PRIMARY,
+        ))
         .alignment(Alignment::Center);
     f.render_widget(header, area);
 }
@@ -117,7 +141,11 @@ fn render_header(f: &mut Frame, area: Rect) {
 pub fn map_body_area(frame: Rect) -> Rect {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(6), Constraint::Min(12), Constraint::Length(3)])
+        .constraints([
+            Constraint::Length(6),
+            Constraint::Min(12),
+            Constraint::Length(3),
+        ])
         .split(frame);
     let body_chunks = Layout::default()
         .direction(Direction::Horizontal)
@@ -235,9 +263,9 @@ fn render_main_menu(f: &mut Frame, app: &App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(6),  // Retro ASCII Header
+            Constraint::Length(6), // Retro ASCII Header
             Constraint::Min(12),   // Body (Sectors & Telemetry)
-            Constraint::Length(3),  // Retro Footer
+            Constraint::Length(3), // Retro Footer
         ])
         .split(f.area());
 
@@ -310,10 +338,16 @@ fn render_main_menu(f: &mut Frame, app: &App) {
         } else {
             let prefix = if is_selected { "▶ " } else { "  " };
             let line = Line::from(vec![
-                Span::styled(prefix, Style::default().fg(color).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    prefix,
+                    Style::default().fg(color).add_modifier(Modifier::BOLD),
+                ),
                 Span::styled(format!("{} ", glyph), Style::default().fg(color)),
                 Span::styled(format!("{:<10}  ", tp.tier.planet_name()), text_style),
-                Span::styled(format!("{}/{}  ", tp.passed, tp.total), Style::default().fg(Theme::ACCENT)),
+                Span::styled(
+                    format!("{}/{}  ", tp.passed, tp.total),
+                    Style::default().fg(Theme::ACCENT),
+                ),
                 Span::styled(badge, Style::default().fg(color)),
             ]);
             f.render_widget(Paragraph::new(line), *rect);
@@ -326,7 +360,12 @@ fn render_main_menu(f: &mut Frame, app: &App) {
 
     // Sidebar: Pilot Log & Telemetry
     let total_mins = app.user_progress.total_practice_seconds / 60;
-    let completed_count = app.user_progress.completed_lessons.values().filter(|v| v.passed).count();
+    let completed_count = app
+        .user_progress
+        .completed_lessons
+        .values()
+        .filter(|v| v.passed)
+        .count();
 
     let rank_title = match app.user_progress.unlocked_tier {
         Tier::Tier1Foundation => "Cadete de Órbita (Tier 1)",
@@ -341,59 +380,127 @@ fn render_main_menu(f: &mut Frame, app: &App) {
     let sidebar_lines = vec![
         Line::from(vec![
             Span::styled("Rango Espacial: ", Style::default().fg(Theme::MUTED)),
-            Span::styled(rank_title, Style::default().fg(Theme::ACCENT).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                rank_title,
+                Style::default()
+                    .fg(Theme::ACCENT)
+                    .add_modifier(Modifier::BOLD),
+            ),
         ]),
         Line::from(""),
         Line::from(vec![
             Span::styled("Sectores Conquistados: ", Style::default().fg(Theme::MUTED)),
-            Span::styled(format!("{}/{}", completed_count, lessons.len()), Style::default().fg(Theme::SUCCESS).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                format!("{}/{}", completed_count, lessons.len()),
+                Style::default()
+                    .fg(Theme::SUCCESS)
+                    .add_modifier(Modifier::BOLD),
+            ),
         ]),
         Line::from(vec![
             Span::styled("Horas de Vuelo: ", Style::default().fg(Theme::MUTED)),
-            Span::styled(format!("{} minutos", total_mins), Style::default().fg(Theme::TEXT)),
+            Span::styled(
+                format!("{} minutos", total_mins),
+                Style::default().fg(Theme::TEXT),
+            ),
         ]),
         Line::from(""),
-        Line::from(Span::styled("✦ SENSORES DE IMPACTO (TECLAS CRÍTICAS) ✦", Style::default().fg(Theme::SECONDARY).add_modifier(Modifier::BOLD))),
+        Line::from(Span::styled(
+            "✦ SENSORES DE IMPACTO (TECLAS CRÍTICAS) ✦",
+            Style::default()
+                .fg(Theme::SECONDARY)
+                .add_modifier(Modifier::BOLD),
+        )),
     ];
 
     let mut sidebar_all_lines = sidebar_lines;
     let mut weak_keys: Vec<_> = app.user_progress.key_stats.iter().collect();
-    weak_keys.sort_by(|a, b| b.1.error_rate().partial_cmp(&a.1.error_rate()).unwrap_or(std::cmp::Ordering::Equal));
+    weak_keys.sort_by(|a, b| {
+        b.1.error_rate()
+            .partial_cmp(&a.1.error_rate())
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     let mut has_weak = false;
     for (ch, stat) in weak_keys.into_iter().take(4) {
         if stat.errors > 0 {
             has_weak = true;
-            let display_char = if *ch == ' ' { "ESPACIO".to_string() } else { format!("'{}'", ch) };
+            let display_char = if *ch == ' ' {
+                "ESPACIO".to_string()
+            } else {
+                format!("'{}'", ch)
+            };
             sidebar_all_lines.push(Line::from(vec![
-                Span::styled(format!(" • Tecla {}: ", display_char), Style::default().fg(Theme::ERROR)),
-                Span::styled(format!("{:.1}% fallo ({} err)", stat.error_rate(), stat.errors), Style::default().fg(Theme::MUTED)),
+                Span::styled(
+                    format!(" • Tecla {}: ", display_char),
+                    Style::default().fg(Theme::ERROR),
+                ),
+                Span::styled(
+                    format!("{:.1}% fallo ({} err)", stat.error_rate(), stat.errors),
+                    Style::default().fg(Theme::MUTED),
+                ),
             ]));
         }
     }
 
     if !has_weak {
-        sidebar_all_lines.push(Line::from(Span::styled(" • Sensores nominales (0 fallos registrados)", Style::default().fg(Theme::SUCCESS))));
+        sidebar_all_lines.push(Line::from(Span::styled(
+            " • Sensores nominales (0 fallos registrados)",
+            Style::default().fg(Theme::SUCCESS),
+        )));
     }
 
     let sidebar = Paragraph::new(sidebar_all_lines)
-        .block(Theme::retro_block("✦ BITÁCORA DEL PILOTO & TELEMETRÍA ✦", Theme::NEBULA_PURPLE))
+        .block(Theme::retro_block(
+            "✦ BITÁCORA DEL PILOTO & TELEMETRÍA ✦",
+            Theme::NEBULA_PURPLE,
+        ))
         .wrap(Wrap { trim: true });
     f.render_widget(sidebar, body_chunks[1]);
 
     // 3. Footer Keybinds
     let footer_spans = vec![
-        Span::styled("[←/→ h/l] ", Style::default().fg(Theme::PRIMARY).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "[←/→ h/l] ",
+            Style::default()
+                .fg(Theme::PRIMARY)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::styled("Planeta  ", Style::default().fg(Theme::TEXT)),
-        Span::styled("[ENTER] ", Style::default().fg(Theme::SUCCESS).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "[ENTER] ",
+            Style::default()
+                .fg(Theme::SUCCESS)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::styled("Aterrizar/Abrir  ", Style::default().fg(Theme::TEXT)),
-        Span::styled("[V] ", Style::default().fg(Theme::SECONDARY).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "[V] ",
+            Style::default()
+                .fg(Theme::SECONDARY)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::styled("Dictado  ", Style::default().fg(Theme::TEXT)),
-        Span::styled("[D] ", Style::default().fg(Theme::ACCENT).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "[D] ",
+            Style::default()
+                .fg(Theme::ACCENT)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::styled("Adaptativo  ", Style::default().fg(Theme::TEXT)),
-        Span::styled("[E] ", Style::default().fg(Theme::PRIMARY).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "[E] ",
+            Style::default()
+                .fg(Theme::PRIMARY)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::styled("Telemetría  ", Style::default().fg(Theme::TEXT)),
-        Span::styled("[Q] ", Style::default().fg(Theme::MUTED).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "[Q] ",
+            Style::default()
+                .fg(Theme::MUTED)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::styled("Salir", Style::default().fg(Theme::TEXT)),
     ];
     let footer = Paragraph::new(Line::from(footer_spans))
@@ -513,7 +620,9 @@ fn menu_row_line(row: &MenuRow, app: &App, lessons: &[Lesson]) -> Line<'static> 
     match row {
         MenuRow::Header(title) => Line::from(Span::styled(
             title.clone(),
-            Style::default().fg(Theme::SECONDARY).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Theme::SECONDARY)
+                .add_modifier(Modifier::BOLD),
         )),
         MenuRow::Lesson(flat_idx) => {
             let lesson = &lessons[*flat_idx];
@@ -528,14 +637,19 @@ fn menu_row_line(row: &MenuRow, app: &App, lessons: &[Lesson]) -> Line<'static> 
             let marker = if is_selected { "▶ " } else { "  " };
             let badge = if passed { "✔ " } else { "  " };
             let style = if is_selected {
-                Style::default().fg(Theme::PRIMARY).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(Theme::PRIMARY)
+                    .add_modifier(Modifier::BOLD)
             } else if passed {
                 Style::default().fg(Theme::SUCCESS)
             } else {
                 Style::default().fg(Theme::TEXT)
             };
 
-            let text = format!("{marker}{badge}{} · {:.0} CPM", lesson.title, lesson.target_cpm);
+            let text = format!(
+                "{marker}{badge}{} · {:.0} CPM",
+                lesson.title, lesson.target_cpm
+            );
             Line::from(Span::styled(text, style))
         }
     }
@@ -544,7 +658,11 @@ fn menu_row_line(row: &MenuRow, app: &App, lessons: &[Lesson]) -> Line<'static> 
 fn render_planet_lessons(f: &mut Frame, app: &App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(6), Constraint::Min(12), Constraint::Length(3)])
+        .constraints([
+            Constraint::Length(6),
+            Constraint::Min(12),
+            Constraint::Length(3),
+        ])
         .split(f.area());
 
     render_header(f, chunks[0]);
@@ -585,31 +703,67 @@ fn render_planet_lessons(f: &mut Frame, app: &App) {
     let tier_progress = Curriculum::all_tier_progress(&app.user_progress);
     let tp = &tier_progress[tier.index()];
     let sidebar_lines = vec![
-        Line::from(Span::styled(tier.name(), Style::default().fg(Theme::ACCENT).add_modifier(Modifier::BOLD))),
+        Line::from(Span::styled(
+            tier.name(),
+            Style::default()
+                .fg(Theme::ACCENT)
+                .add_modifier(Modifier::BOLD),
+        )),
         Line::from(""),
         Line::from(vec![
             Span::styled("Sectores conquistados: ", Style::default().fg(Theme::MUTED)),
-            Span::styled(format!("{}/{}", tp.passed, tp.total), Style::default().fg(Theme::SUCCESS).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                format!("{}/{}", tp.passed, tp.total),
+                Style::default()
+                    .fg(Theme::SUCCESS)
+                    .add_modifier(Modifier::BOLD),
+            ),
         ]),
         Line::from(vec![
             Span::styled("Velocidad mínima: ", Style::default().fg(Theme::MUTED)),
-            Span::styled(format!("{:.0} CPM", tier.min_cpm()), Style::default().fg(Theme::TEXT)),
+            Span::styled(
+                format!("{:.0} CPM", tier.min_cpm()),
+                Style::default().fg(Theme::TEXT),
+            ),
         ]),
     ];
     let sidebar = Paragraph::new(sidebar_lines)
-        .block(Theme::retro_block("✦ TELEMETRÍA DEL SECTOR ✦", Theme::NEBULA_PURPLE))
+        .block(Theme::retro_block(
+            "✦ TELEMETRÍA DEL SECTOR ✦",
+            Theme::NEBULA_PURPLE,
+        ))
         .wrap(Wrap { trim: true });
     f.render_widget(sidebar, body_chunks[1]);
 
     // Footer keybinds.
     let footer_spans = vec![
-        Span::styled("[↑/↓ j/k] ", Style::default().fg(Theme::PRIMARY).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "[↑/↓ j/k] ",
+            Style::default()
+                .fg(Theme::PRIMARY)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::styled("Lección  ", Style::default().fg(Theme::TEXT)),
-        Span::styled("[ENTER] ", Style::default().fg(Theme::SUCCESS).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "[ENTER] ",
+            Style::default()
+                .fg(Theme::SUCCESS)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::styled("Practicar  ", Style::default().fg(Theme::TEXT)),
-        Span::styled("[ESC/←] ", Style::default().fg(Theme::SECONDARY).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "[ESC/←] ",
+            Style::default()
+                .fg(Theme::SECONDARY)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::styled("Volver al mapa  ", Style::default().fg(Theme::TEXT)),
-        Span::styled("[Q] ", Style::default().fg(Theme::MUTED).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "[Q] ",
+            Style::default()
+                .fg(Theme::MUTED)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::styled("Volver", Style::default().fg(Theme::TEXT)),
     ];
     let footer = Paragraph::new(Line::from(footer_spans))
@@ -625,7 +779,7 @@ fn render_dictation(f: &mut Frame, app: &App) {
             .constraints([
                 Constraint::Length(4),  // Header
                 Constraint::Length(11), // Dictation Area (ribbon + slots + audio bar)
-                Constraint::Min(10),   // Keyboard visualizer
+                Constraint::Min(10),    // Keyboard visualizer
                 Constraint::Length(3),  // Footer
             ])
             .split(f.area());
@@ -633,16 +787,33 @@ fn render_dictation(f: &mut Frame, app: &App) {
         // 1. Header
         let header_lines = vec![
             Line::from(vec![
-                Span::styled("✦ MODO DICTADO AUDITIVO · RECEPTOR SUBESPACIAL ✦ ", Style::default().fg(Theme::PRIMARY).add_modifier(Modifier::BOLD)),
-                Span::styled("— Entrenamiento de Reflejo Auditivo-Motor", Style::default().fg(Theme::TEXT)),
+                Span::styled(
+                    "✦ MODO DICTADO AUDITIVO · RECEPTOR SUBESPACIAL ✦ ",
+                    Style::default()
+                        .fg(Theme::PRIMARY)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    "— Entrenamiento de Reflejo Auditivo-Motor",
+                    Style::default().fg(Theme::TEXT),
+                ),
             ]),
             Line::from(vec![
-                Span::styled(" Decodifica la transmisión de voz. ", Style::default().fg(Theme::SECONDARY)),
-                Span::styled("Usa [TAB] si necesitas repetir la señal de audio.", Style::default().fg(Theme::MUTED)),
+                Span::styled(
+                    " Decodifica la transmisión de voz. ",
+                    Style::default().fg(Theme::SECONDARY),
+                ),
+                Span::styled(
+                    "Usa [TAB] si necesitas repetir la señal de audio.",
+                    Style::default().fg(Theme::MUTED),
+                ),
             ]),
         ];
         let header = Paragraph::new(header_lines)
-            .block(Theme::retro_block("CANAL DE COMUNICACIÓN SUBESPACIAL", Theme::PRIMARY))
+            .block(Theme::retro_block(
+                "CANAL DE COMUNICACIÓN SUBESPACIAL",
+                Theme::PRIMARY,
+            ))
             .alignment(Alignment::Center);
         f.render_widget(header, chunks[0]);
 
@@ -656,13 +827,36 @@ fn render_dictation(f: &mut Frame, app: &App) {
 
         // 4. Dictation Footer
         let footer_spans = vec![
-            Span::styled("[ESC] ", Style::default().fg(Theme::MUTED).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "[ESC] ",
+                Style::default()
+                    .fg(Theme::MUTED)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled("Menú   ", Style::default().fg(Theme::TEXT)),
-            Span::styled("[TAB] ", Style::default().fg(Theme::SECONDARY).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "[TAB] ",
+                Style::default()
+                    .fg(Theme::SECONDARY)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled("Repetir Audio   ", Style::default().fg(Theme::TEXT)),
-            Span::styled("[F2 / Shift+TAB] ", Style::default().fg(Theme::PRIMARY).add_modifier(Modifier::BOLD)),
-            Span::styled("Cambiar Frecuencia (Voz)   ", Style::default().fg(Theme::TEXT)),
-            Span::styled("[+ / -] ", Style::default().fg(Theme::ACCENT).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "[F2 / Shift+TAB] ",
+                Style::default()
+                    .fg(Theme::PRIMARY)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                "Cambiar Frecuencia (Voz)   ",
+                Style::default().fg(Theme::TEXT),
+            ),
+            Span::styled(
+                "[+ / -] ",
+                Style::default()
+                    .fg(Theme::ACCENT)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled("Velocidad Audio   ", Style::default().fg(Theme::TEXT)),
             Span::styled("Regla: ≥ 96% precisión", Style::default().fg(Theme::MUTED)),
         ];
@@ -699,11 +893,24 @@ fn render_practice(f: &mut Frame, app: &App) {
 
         // 4. Practice Footer
         let footer_spans = vec![
-            Span::styled("[ESC] ", Style::default().fg(Theme::MUTED).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "[ESC] ",
+                Style::default()
+                    .fg(Theme::MUTED)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled("Abortar al Menú   ", Style::default().fg(Theme::TEXT)),
-            Span::styled("[TAB] ", Style::default().fg(Theme::SECONDARY).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "[TAB] ",
+                Style::default()
+                    .fg(Theme::SECONDARY)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled("Reiniciar Misión   ", Style::default().fg(Theme::TEXT)),
-            Span::styled("✦ FILA GUÍA: Mantén dedos en ASDF - JKLÑ sin apartar la vista ✦", Style::default().fg(Theme::NEBULA_PURPLE)),
+            Span::styled(
+                "✦ FILA GUÍA: Mantén dedos en ASDF - JKLÑ sin apartar la vista ✦",
+                Style::default().fg(Theme::NEBULA_PURPLE),
+            ),
         ];
         let footer = Paragraph::new(Line::from(footer_spans))
             .block(Theme::retro_block("MANDOS DE VUELO", Theme::MUTED))
@@ -721,7 +928,9 @@ fn render_stats(f: &mut Frame, app: &App) {
     let mut lines = Vec::new();
     lines.push(Line::from(Span::styled(
         "✦ CARTOGRAFÍA ESTELAR & MAPA DE RENDIMIENTO POR TECLA ✦",
-        Style::default().fg(Theme::PRIMARY).add_modifier(Modifier::BOLD),
+        Style::default()
+            .fg(Theme::PRIMARY)
+            .add_modifier(Modifier::BOLD),
     )));
     lines.push(Line::from(""));
 
@@ -731,35 +940,88 @@ fn render_stats(f: &mut Frame, app: &App) {
     if stats.is_empty() {
         lines.push(Line::from(Span::styled("Aún no hay datos de vuelo registrados. ¡Completa misiones para generar tu cartografía estelar!", Style::default().fg(Theme::MUTED))));
     } else {
-        lines.push(Line::from(vec![
-            Span::styled(format!("{:<8} {:<12} {:<12} {:<15} {:<15}", "Tecla", "Intentos", "Impactos", "% Error", "Latencia Med."), Style::default().fg(Theme::SECONDARY).add_modifier(Modifier::BOLD)),
-        ]));
-        lines.push(Line::from(Span::styled("─".repeat(65), Style::default().fg(Theme::MUTED))));
+        lines.push(Line::from(vec![Span::styled(
+            format!(
+                "{:<8} {:<12} {:<12} {:<15} {:<15}",
+                "Tecla", "Intentos", "Impactos", "% Error", "Latencia Med."
+            ),
+            Style::default()
+                .fg(Theme::SECONDARY)
+                .add_modifier(Modifier::BOLD),
+        )]));
+        lines.push(Line::from(Span::styled(
+            "─".repeat(65),
+            Style::default().fg(Theme::MUTED),
+        )));
 
         for (ch, stat) in stats.into_iter().take(14) {
-            let error_color = if stat.error_rate() > 4.0 { Theme::ERROR } else { Theme::SUCCESS };
-            let display_char = if *ch == ' ' { "ESPACIO".to_string() } else { format!("'{}'", ch) };
+            let error_color = if stat.error_rate() > 4.0 {
+                Theme::ERROR
+            } else {
+                Theme::SUCCESS
+            };
+            let display_char = if *ch == ' ' {
+                "ESPACIO".to_string()
+            } else {
+                format!("'{}'", ch)
+            };
 
             lines.push(Line::from(vec![
-                Span::styled(format!("{:<8} ", display_char), Style::default().fg(Theme::TEXT)),
-                Span::styled(format!("{:<12} ", stat.attempts), Style::default().fg(Theme::MUTED)),
-                Span::styled(format!("{:<12} ", stat.errors), Style::default().fg(Theme::MUTED)),
-                Span::styled(format!("{:<14.1}% ", stat.error_rate()), Style::default().fg(error_color).add_modifier(Modifier::BOLD)),
-                Span::styled(format!("{:.0} ms", stat.avg_latency_ms()), Style::default().fg(Theme::TEXT)),
+                Span::styled(
+                    format!("{:<8} ", display_char),
+                    Style::default().fg(Theme::TEXT),
+                ),
+                Span::styled(
+                    format!("{:<12} ", stat.attempts),
+                    Style::default().fg(Theme::MUTED),
+                ),
+                Span::styled(
+                    format!("{:<12} ", stat.errors),
+                    Style::default().fg(Theme::MUTED),
+                ),
+                Span::styled(
+                    format!("{:<14.1}% ", stat.error_rate()),
+                    Style::default()
+                        .fg(error_color)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    format!("{:.0} ms", stat.avg_latency_ms()),
+                    Style::default().fg(Theme::TEXT),
+                ),
             ]));
         }
     }
 
     let stats_widget = Paragraph::new(lines)
-        .block(Theme::retro_block("TELEMETRÍA HISTÓRICA DE VUELO", Theme::PRIMARY))
+        .block(Theme::retro_block(
+            "TELEMETRÍA HISTÓRICA DE VUELO",
+            Theme::PRIMARY,
+        ))
         .alignment(Alignment::Left);
     f.render_widget(stats_widget, chunks[0]);
 
     let footer_spans = vec![
-        Span::styled("[D] ", Style::default().fg(Theme::SECONDARY).add_modifier(Modifier::BOLD)),
-        Span::styled("Iniciar Drill de Teclas Débiles   ", Style::default().fg(Theme::TEXT)),
-        Span::styled("[ESC / ENTER / Q] ", Style::default().fg(Theme::PRIMARY).add_modifier(Modifier::BOLD)),
-        Span::styled("Volver al Comando Central", Style::default().fg(Theme::TEXT)),
+        Span::styled(
+            "[D] ",
+            Style::default()
+                .fg(Theme::SECONDARY)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            "Iniciar Drill de Teclas Débiles   ",
+            Style::default().fg(Theme::TEXT),
+        ),
+        Span::styled(
+            "[ESC / ENTER / Q] ",
+            Style::default()
+                .fg(Theme::PRIMARY)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            "Volver al Comando Central",
+            Style::default().fg(Theme::TEXT),
+        ),
     ];
     let footer = Paragraph::new(Line::from(footer_spans))
         .block(Theme::retro_block("ACCIONES", Theme::MUTED))
@@ -794,7 +1056,9 @@ fn render_history(f: &mut Frame, app: &App) {
     let mut lines = Vec::new();
     lines.push(Line::from(Span::styled(
         "✦ BITÁCORA DE VUELO — HISTORIAL DE SESIONES ✦",
-        Style::default().fg(Theme::PRIMARY).add_modifier(Modifier::BOLD),
+        Style::default()
+            .fg(Theme::PRIMARY)
+            .add_modifier(Modifier::BOLD),
     )));
     lines.push(Line::from(""));
 
@@ -818,8 +1082,16 @@ fn render_history(f: &mut Frame, app: &App) {
     f.render_widget(history_widget, chunks[0]);
 
     let footer_spans = vec![
-        Span::styled("[ESC / ENTER / Q] ", Style::default().fg(Theme::PRIMARY).add_modifier(Modifier::BOLD)),
-        Span::styled("Volver al Comando Central", Style::default().fg(Theme::TEXT)),
+        Span::styled(
+            "[ESC / ENTER / Q] ",
+            Style::default()
+                .fg(Theme::PRIMARY)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            "Volver al Comando Central",
+            Style::default().fg(Theme::TEXT),
+        ),
     ];
     let footer = Paragraph::new(Line::from(footer_spans))
         .block(Theme::retro_block("ACCIONES", Theme::MUTED))
@@ -832,21 +1104,37 @@ fn render_history(f: &mut Frame, app: &App) {
 /// content-scope note.
 fn session_history_line(record: &SessionRecord) -> Line<'static> {
     let (kind_label, detail) = match &record.kind {
-        SessionKind::Lesson { lesson_id, passed, .. } => {
-            let result = if *passed { "✓ Aprobado" } else { "✗ No aprobado" };
+        SessionKind::Lesson {
+            lesson_id, passed, ..
+        } => {
+            let result = if *passed {
+                "✓ Aprobado"
+            } else {
+                "✗ No aprobado"
+            };
             ("LECCIÓN".to_string(), format!("{lesson_id} — {result}"))
         }
-        SessionKind::Drill => ("DRILL".to_string(), "Práctica de teclas débiles".to_string()),
-        SessionKind::Dictation { completed_words, total_words, .. } => {
-            ("DICTADO".to_string(), format!("{completed_words}/{total_words} palabras"))
-        }
+        SessionKind::Drill => (
+            "DRILL".to_string(),
+            "Práctica de teclas débiles".to_string(),
+        ),
+        SessionKind::Dictation {
+            completed_words,
+            total_words,
+            ..
+        } => (
+            "DICTADO".to_string(),
+            format!("{completed_words}/{total_words} palabras"),
+        ),
     };
 
     let summary = &record.summary;
     Line::from(vec![
         Span::styled(
             format!("• {kind_label:<8} "),
-            Style::default().fg(Theme::SECONDARY).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Theme::SECONDARY)
+                .add_modifier(Modifier::BOLD),
         ),
         Span::styled(format!("{detail} — "), Style::default().fg(Theme::TEXT)),
         Span::styled(
@@ -862,10 +1150,12 @@ fn session_history_line(record: &SessionRecord) -> Line<'static> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::model::{PlanetStatus, SessionKind, SessionRecord, SessionSummary, UserProgress};
-    use crate::tui::planet_layout::{planet_at, PLANET_CARD_WIDTH, SHIP_GUTTER_HEIGHT};
+    use crate::core::model::{
+        PlanetStatus, SessionKind, SessionRecord, SessionSummary, UserProgress,
+    };
+    use crate::tui::planet_layout::{PLANET_CARD_WIDTH, SHIP_GUTTER_HEIGHT, planet_at};
     use crate::tui::planets::RAMP;
-    use ratatui::{backend::TestBackend, Terminal};
+    use ratatui::{Terminal, backend::TestBackend};
     use std::time::Duration;
 
     /// True when `symbols` contains at least one sphere ramp glyph
@@ -938,30 +1228,63 @@ mod tests {
         // Line 3 is the progress·meta line: the leading progress digits
         // survive every rung, the trailing CPM detail drops first.
         for c in &contents {
-            assert!(c[2].starts_with("7/9"), "progress must lead every rung: {:?}", c[2]);
+            assert!(
+                c[2].starts_with("7/9"),
+                "progress must lead every rung: {:?}",
+                c[2]
+            );
         }
-        assert!(contents[0][2].ends_with("CPM"), "full meta fits at rung 28: {:?}", contents[0][2]);
+        assert!(
+            contents[0][2].ends_with("CPM"),
+            "full meta fits at rung 28: {:?}",
+            contents[0][2]
+        );
         for c in &contents[1..] {
-            assert!(!c[2].contains("CPM"), "narrow rungs must drop the CPM meta: {:?}", c);
+            assert!(
+                !c[2].contains("CPM"),
+                "narrow rungs must drop the CPM meta: {:?}",
+                c
+            );
         }
 
         // ...then the planet name ellipsizes once it no longer fits.
         assert_eq!(contents[0][0], long_name, "name fits at rung 28 untouched");
-        assert!(contents[2][0].ends_with('…'), "rung 16 must ellipsize the name: {:?}", contents[2][0]);
-        assert!(contents[3][0].ends_with('…'), "rung 10 must ellipsize the name: {:?}", contents[3][0]);
+        assert!(
+            contents[2][0].ends_with('…'),
+            "rung 16 must ellipsize the name: {:?}",
+            contents[2][0]
+        );
+        assert!(
+            contents[3][0].ends_with('…'),
+            "rung 10 must ellipsize the name: {:?}",
+            contents[3][0]
+        );
 
         // Glyph + badge + progress NEVER drop at any rung (content-wise).
         for c in &contents {
             let joined = c.join("\n");
-            assert!(joined.contains('◎'), "glyph must survive every rung: {joined}");
-            assert!(joined.contains("DESTINO ACTUAL"), "badge must survive every rung: {joined}");
-            assert!(joined.contains("7/9"), "progress must survive every rung: {joined}");
+            assert!(
+                joined.contains('◎'),
+                "glyph must survive every rung: {joined}"
+            );
+            assert!(
+                joined.contains("DESTINO ACTUAL"),
+                "badge must survive every rung: {joined}"
+            );
+            assert!(
+                joined.contains("7/9"),
+                "progress must survive every rung: {joined}"
+            );
         }
 
         // The amount of shown detail never grows as the column shrinks.
         let detail: Vec<usize> = contents
             .iter()
-            .map(|c| c.iter().map(|line| UnicodeWidthStr::width(line.as_str())).sum())
+            .map(|c| {
+                c.iter()
+                    .map(|line| UnicodeWidthStr::width(line.as_str()))
+                    .sum()
+            })
             .collect();
         assert!(
             detail.windows(2).all(|w| w[0] >= w[1]),
@@ -997,7 +1320,10 @@ mod tests {
             }
             let tp = &progresses[i];
             let (glyph, _, _) = planet_style(tp.status);
-            assert!(symbols.contains(glyph), "card {i} must show status glyph '{glyph}' in:\n{symbols}");
+            assert!(
+                symbols.contains(glyph),
+                "card {i} must show status glyph '{glyph}' in:\n{symbols}"
+            );
             // D8 stacked anatomy: the info lines below the lane carry the
             // full badge text again (the card-wide info block replaced the
             // Batch-A 2-column side sliver that clipped it). The lane
@@ -1069,7 +1395,10 @@ mod tests {
             .enumerate()
             .filter(|(_, r)| r.width > 0 && r.height > 0)
             .collect();
-        assert!(visible.len() >= 2, "expected a multi-card window: {visible:?}");
+        assert!(
+            visible.len() >= 2,
+            "expected a multi-card window: {visible:?}"
+        );
         for w in visible.windows(2) {
             assert!(
                 w[1].1.x > w[0].1.x,
@@ -1539,10 +1868,7 @@ mod tests {
         // directly under the docking ship — must still resolve to card i:
         // cards drive hit-testing, the ship sprite never does.
         let lane = sprite_lane(cards[i]);
-        let under_ship = ratatui::layout::Position::new(
-            lane.x + lane.width / 2,
-            cards[i].y,
-        );
+        let under_ship = ratatui::layout::Position::new(lane.x + lane.width / 2, cards[i].y);
         assert_eq!(
             planet_at(map, under_ship, i),
             Some(i),
@@ -1956,7 +2282,10 @@ mod tests {
             rendered.contains("sectores"),
             "expected progress·meta line in:\n{rendered}"
         );
-        assert!(rendered.contains('/'), "expected progress digits in:\n{rendered}");
+        assert!(
+            rendered.contains('/'),
+            "expected progress digits in:\n{rendered}"
+        );
     }
 
     #[test]
@@ -2008,8 +2337,14 @@ mod tests {
                 "compact column {i} must show status glyph '{glyph}': '{symbols}'"
             );
         }
-        assert!(!rendered.contains('▲'), "compact mode must not render the ship sprite:\n{rendered}");
-        assert!(!rendered.contains('█'), "compact mode must not render the ship sprite:\n{rendered}");
+        assert!(
+            !rendered.contains('▲'),
+            "compact mode must not render the ship sprite:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains('█'),
+            "compact mode must not render the ship sprite:\n{rendered}"
+        );
     }
 
     #[test]
@@ -2025,10 +2360,22 @@ mod tests {
 
     #[test]
     fn test_status_badges_match_precedence_for_each_glyph() {
-        assert_eq!(planet_style(PlanetStatus::Conquered), ("◉", Theme::SUCCESS, "CONQUISTADO"));
-        assert_eq!(planet_style(PlanetStatus::Current), ("◎", Theme::PRIMARY, "DESTINO ACTUAL"));
-        assert_eq!(planet_style(PlanetStatus::InProgress), ("◍", Theme::ACCENT, "EN CURSO"));
-        assert_eq!(planet_style(PlanetStatus::Unexplored), ("○", Theme::MUTED, "SIN EXPLORAR"));
+        assert_eq!(
+            planet_style(PlanetStatus::Conquered),
+            ("◉", Theme::SUCCESS, "CONQUISTADO")
+        );
+        assert_eq!(
+            planet_style(PlanetStatus::Current),
+            ("◎", Theme::PRIMARY, "DESTINO ACTUAL")
+        );
+        assert_eq!(
+            planet_style(PlanetStatus::InProgress),
+            ("◍", Theme::ACCENT, "EN CURSO")
+        );
+        assert_eq!(
+            planet_style(PlanetStatus::Unexplored),
+            ("○", Theme::MUTED, "SIN EXPLORAR")
+        );
     }
 
     #[test]
@@ -2038,7 +2385,11 @@ mod tests {
         let area = Rect::new(0, 0, 120, 40);
         let chunks = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Length(6), Constraint::Min(12), Constraint::Length(3)])
+            .constraints([
+                Constraint::Length(6),
+                Constraint::Min(12),
+                Constraint::Length(3),
+            ])
             .split(area);
         let body_chunks = Layout::default()
             .direction(Direction::Horizontal)
@@ -2092,9 +2443,18 @@ mod tests {
 
         let rendered = render_to_string(&app, 100, 34);
 
-        assert!(rendered.contains(&tier1_title), "expected Tier1 lesson '{tier1_title}' in:\n{rendered}");
-        assert!(rendered.contains(Tier::Tier1Foundation.planet_name()), "expected Tier1 planet name in:\n{rendered}");
-        assert!(!rendered.contains(&tier2_title), "must not list Tier2 lesson '{tier2_title}' while on Tier1:\n{rendered}");
+        assert!(
+            rendered.contains(&tier1_title),
+            "expected Tier1 lesson '{tier1_title}' in:\n{rendered}"
+        );
+        assert!(
+            rendered.contains(Tier::Tier1Foundation.planet_name()),
+            "expected Tier1 planet name in:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains(&tier2_title),
+            "must not list Tier2 lesson '{tier2_title}' while on Tier1:\n{rendered}"
+        );
     }
 
     #[test]
@@ -2123,7 +2483,10 @@ mod tests {
 
         let rendered = render_to_string(&app, 100, 34);
 
-        assert!(rendered.contains(&section_title), "expected section header '{section_title}' in:\n{rendered}");
+        assert!(
+            rendered.contains(&section_title),
+            "expected section header '{section_title}' in:\n{rendered}"
+        );
     }
 
     /// Builds a minimal, arbitrary [`SessionRecord`] for `CurrentView::History`
@@ -2185,8 +2548,14 @@ mod tests {
 
         let rendered = render_to_string(&app, 120, 30);
 
-        assert!(rendered.contains("LECCIÓN"), "expected a Lesson-kind entry in:\n{rendered}");
-        assert!(rendered.contains("DICTADO"), "expected a Dictation-kind entry in:\n{rendered}");
+        assert!(
+            rendered.contains("LECCIÓN"),
+            "expected a Lesson-kind entry in:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("DICTADO"),
+            "expected a Dictation-kind entry in:\n{rendered}"
+        );
 
         // Spec rev 2's three negative scenarios (history-view content scope):
         // no confusion/substitution matrix, no per-finger latency breakdown,
@@ -2194,12 +2563,33 @@ mod tests {
         // (SessionSummary::net_wpm, SessionBucket, etc.) but never surfaced
         // by this view.
         let lower = rendered.to_lowercase();
-        assert!(!lower.contains("confus"), "must not render a confusion matrix:\n{rendered}");
-        assert!(!lower.contains("sustituci"), "must not render a substitution matrix:\n{rendered}");
-        assert!(!lower.contains("matriz"), "must not render any matrix widget:\n{rendered}");
-        assert!(!lower.contains("dedo"), "must not render a per-finger latency breakdown:\n{rendered}");
-        assert!(!lower.contains("wpm neto"), "must not render a net-WPM figure:\n{rendered}");
-        assert!(!lower.contains("exportar"), "must not render an export control:\n{rendered}");
-        assert!(!lower.contains("importar"), "must not render an import control:\n{rendered}");
+        assert!(
+            !lower.contains("confus"),
+            "must not render a confusion matrix:\n{rendered}"
+        );
+        assert!(
+            !lower.contains("sustituci"),
+            "must not render a substitution matrix:\n{rendered}"
+        );
+        assert!(
+            !lower.contains("matriz"),
+            "must not render any matrix widget:\n{rendered}"
+        );
+        assert!(
+            !lower.contains("dedo"),
+            "must not render a per-finger latency breakdown:\n{rendered}"
+        );
+        assert!(
+            !lower.contains("wpm neto"),
+            "must not render a net-WPM figure:\n{rendered}"
+        );
+        assert!(
+            !lower.contains("exportar"),
+            "must not render an export control:\n{rendered}"
+        );
+        assert!(
+            !lower.contains("importar"),
+            "must not render an import control:\n{rendered}"
+        );
     }
 }

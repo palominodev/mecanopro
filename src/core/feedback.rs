@@ -25,7 +25,10 @@ impl FeedbackCoach {
     }
 
     /// Evaluates dictation performance and returns tailored coaching tips
-    pub fn evaluate_dictation(metrics: &DictationMetrics, replay_count: usize) -> Vec<&'static str> {
+    pub fn evaluate_dictation(
+        metrics: &DictationMetrics,
+        replay_count: usize,
+    ) -> Vec<&'static str> {
         let mut tips = Vec::new();
 
         // 1. Accuracy feedback (The Golden Rule)
@@ -49,7 +52,9 @@ impl FeedbackCoach {
 
         // 4. Rhythm and consistency feedback
         if metrics.consistency < 75.0 {
-            tips.push("Consistencia: Trata de mantener el mismo intervalo de tiempo entre cada tecla.");
+            tips.push(
+                "Consistencia: Trata de mantener el mismo intervalo de tiempo entre cada tecla.",
+            );
         }
 
         tips

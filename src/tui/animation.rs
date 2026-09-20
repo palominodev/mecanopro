@@ -406,7 +406,10 @@ mod tests {
         .into_iter()
         .map(phase_count)
         .sum();
-        assert_eq!(phase_total, 4, "ShipPhase variant set must stay exactly Idle/Traveling/Descending/Ascending");
+        assert_eq!(
+            phase_total, 4,
+            "ShipPhase variant set must stay exactly Idle/Traveling/Descending/Ascending"
+        );
     }
 
     #[test]
@@ -424,7 +427,11 @@ mod tests {
         anim.complete();
 
         anim.ascend();
-        assert_eq!(anim.dock_depth(), 1.0, "ascend start: still docked into the core");
+        assert_eq!(
+            anim.dock_depth(),
+            1.0,
+            "ascend start: still docked into the core"
+        );
         anim.advance(anim.duration() / 2);
         assert!((anim.dock_depth() - 0.125).abs() < 1e-4, "ascend mid");
     }

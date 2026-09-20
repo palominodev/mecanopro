@@ -1,11 +1,11 @@
 use crate::core::model::{Lesson, SessionMetrics};
 use crate::tui::theme::Theme;
 use ratatui::{
+    Frame,
     layout::{Alignment, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Clear, Paragraph},
-    Frame,
 };
 
 pub struct SummaryModal;
@@ -19,9 +19,13 @@ impl SummaryModal {
         passed: bool,
     ) {
         let title_style = if passed {
-            Style::default().fg(Theme::SUCCESS).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(Theme::SUCCESS)
+                .add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(Theme::ERROR).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(Theme::ERROR)
+                .add_modifier(Modifier::BOLD)
         };
 
         let result_banner = if passed {
@@ -36,9 +40,15 @@ impl SummaryModal {
 
         // Micro ASCII badge
         if passed {
-            lines.push(Line::from(Span::styled("   🚀 [ VECTOR DE SALTO ESTABLECIDO ] 🚀", Style::default().fg(Theme::PRIMARY))));
+            lines.push(Line::from(Span::styled(
+                "   🚀 [ VECTOR DE SALTO ESTABLECIDO ] 🚀",
+                Style::default().fg(Theme::PRIMARY),
+            )));
         } else {
-            lines.push(Line::from(Span::styled("   /!\\ [ REGLA DE ORO: PRECISIÓN CRÍTICA ] /!\\", Style::default().fg(Theme::ERROR))));
+            lines.push(Line::from(Span::styled(
+                "   /!\\ [ REGLA DE ORO: PRECISIÓN CRÍTICA ] /!\\",
+                Style::default().fg(Theme::ERROR),
+            )));
         }
         lines.push(Line::from(""));
 
@@ -47,7 +57,9 @@ impl SummaryModal {
             Span::styled("• Velocidad de Vuelo: ", Style::default().fg(Theme::MUTED)),
             Span::styled(
                 format!("{:.0} CPM ({:.1} WPM)", metrics.cpm, metrics.raw_wpm),
-                Style::default().fg(Theme::PRIMARY).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Theme::PRIMARY)
+                    .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
                 format!("  [Meta del Sector: {:.0} CPM]", lesson.target_cpm),
@@ -57,13 +69,20 @@ impl SummaryModal {
 
         // Accuracy comparison
         let acc_style = if metrics.accuracy >= lesson.min_accuracy {
-            Style::default().fg(Theme::SUCCESS).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(Theme::SUCCESS)
+                .add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(Theme::ERROR).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(Theme::ERROR)
+                .add_modifier(Modifier::BOLD)
         };
 
         lines.push(Line::from(vec![
-            Span::styled("• Integridad de Escudos: ", Style::default().fg(Theme::MUTED)),
+            Span::styled(
+                "• Integridad de Escudos: ",
+                Style::default().fg(Theme::MUTED),
+            ),
             Span::styled(format!("{:.1}%", metrics.accuracy), acc_style),
             Span::styled(
                 format!("  [Requerido: ≥{:.0}%]", lesson.min_accuracy),
@@ -76,19 +95,30 @@ impl SummaryModal {
             Span::styled("• Sincronía de Ritmo: ", Style::default().fg(Theme::MUTED)),
             Span::styled(
                 format!("{:.0}%", metrics.consistency),
-                Style::default().fg(Theme::NEBULA_PURPLE).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Theme::NEBULA_PURPLE)
+                    .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
-                format!("  (Turbulencias: {} de {} teclas)", metrics.error_count, metrics.total_keystrokes),
+                format!(
+                    "  (Turbulencias: {} de {} teclas)",
+                    metrics.error_count, metrics.total_keystrokes
+                ),
                 Style::default().fg(Theme::MUTED),
             ),
         ]));
 
         // Dynamic Coaching Tips
-        let tips = crate::core::feedback::FeedbackCoach::evaluate_session(metrics, lesson.min_accuracy);
+        let tips =
+            crate::core::feedback::FeedbackCoach::evaluate_session(metrics, lesson.min_accuracy);
         if !tips.is_empty() {
             lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled(" 🤖 I.A. DE A BORDO (DIAGNÓSTICO): ", Style::default().fg(Theme::SECONDARY).add_modifier(Modifier::BOLD))));
+            lines.push(Line::from(Span::styled(
+                " 🤖 I.A. DE A BORDO (DIAGNÓSTICO): ",
+                Style::default()
+                    .fg(Theme::SECONDARY)
+                    .add_modifier(Modifier::BOLD),
+            )));
             for tip in tips {
                 lines.push(Line::from(vec![
                     Span::styled(" ✦ ", Style::default().fg(Theme::ACCENT)),
@@ -99,11 +129,26 @@ impl SummaryModal {
 
         lines.push(Line::from(""));
         lines.push(Line::from(vec![
-            Span::styled("[R] ", Style::default().fg(Theme::PRIMARY).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "[R] ",
+                Style::default()
+                    .fg(Theme::PRIMARY)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled("Reintentar   ", Style::default().fg(Theme::TEXT)),
-            Span::styled("[S / ENTER] ", Style::default().fg(Theme::SUCCESS).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "[S / ENTER] ",
+                Style::default()
+                    .fg(Theme::SUCCESS)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled("Siguiente Sector   ", Style::default().fg(Theme::TEXT)),
-            Span::styled("[ESC / M] ", Style::default().fg(Theme::MUTED).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "[ESC / M] ",
+                Style::default()
+                    .fg(Theme::MUTED)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled("Comando Central", Style::default().fg(Theme::TEXT)),
         ]));
 
