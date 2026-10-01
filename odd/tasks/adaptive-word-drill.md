@@ -45,8 +45,8 @@ the drill cannot know which real words are hard.
 ## Tasks
 - [x] T1 (core) `WordStat` model + `UserProgress.word_stats` (serde default) + pure `word_observations` fn for typing and dictation streams. Route: delegated writer. Tests first.
 - [x] T2 (storage+app) Merge word observations in `record_session_result`; wire both call sites (typing, dictation). Also: normalize word keys (lowercase, trim non-alphanumeric edges, skip empties), cap `word_stats` (deterministic eviction), and pin the engine retry behaviour with a real-TypingEngine test (review R3-001/R3-002). Route: delegated writer.
-- [ ] T3 (core) `generate_weak_word_drill`: rank failing words, weighted repeat, fallback to pool words with weak letters; rewire `App::start_adaptive_drill`. Route: delegated writer.
-- [ ] T4 (ui/docs) Update drill title/description, ui.rs strings (1013, 1120), README (54, 74), obsolete tests (curriculum.rs:2675, app.rs:1525). Route: delegated writer.
+- [x] T3 (core+app) (a) fix eviction ranking so error-bearing words are never evicted before clean ones (review R3-001 of T2); (b) `generate_weak_word_drill(word_stats, weak_keys)`: rank failing words, weighted repeat, fallback to real pool words with weak letters; new title/description; rewire `App::start_adaptive_drill`; update the tests that break (curriculum.rs:2675, app.rs:1525); (c) strengthen adaptive-drill app test to type a known wrong stroke and check reloaded word_stats (review R3-002 of T2). Route: delegated writer.
+- [ ] T4 (ui/docs) Update ui.rs strings (1013 start-drill label, 1120 history label), README (54, 74); visual check of the TUI. Route: delegated writer.
 
 ## Acceptance criteria
 - After typing a word wrongly, its `word_stats` entry has errors > 0 and survives save/load.
@@ -72,5 +72,14 @@ Writer trigger fired (2+ non-trivial files per task: model.rs, repository.rs, cu
   - Delivered: record_session_result takes &[WordObservation]; typing/adaptive/dictation callers wired; words::normalize_word_key; MAX_WORD_STATS=500 deterministic eviction (fewest attempts, fewest errors, lexicographic; never evicts current-call words); real TypingEngine/DictationEngine tests pin the retry behaviour (R3-001); save/load + legacy-file tests.
   - Open decision: one call merging >500 distinct words may exceed the cap (documented; unrealistic per session).
 
+- T2 review (slice 2ab9d22+docs, base=c0698f4, 568 lines): medium, consent granted by user, native review-reliability APPROVED, authority burned (lineage review-be41c4e680048086). Reviewed boundary is now 43531bf.
+  - Advisory findings accepted into T3: R3-001 (WARNING) eviction sorts by attempts then errors, so a one-off high-error word can be evicted before a clean frequent one (kills the weak-word signal T3 ranks on) -> change ranking + test with differing attempt counts; R3-002 (SUGGESTION) adaptive-drill wiring test only asserts word_stats non-empty -> type a known wrong stroke and assert reloaded stats.
+
+- T3 done, commits 59279af (fix(core): evict clean words before error-bearing ones in word stats cap) and 306587f (feat(core): drill the words you fail most in the adaptive drill). Route: delegated writer.
+  - RED observed (eviction: 2 of 5 cap tests failed on old rule; drill: 13 compile errors for missing generator); GREEN: cargo test 338 passed / 0 failed (parent spot check confirmed), clippy --all-targets -D warnings clean, fmt --check clean. No trailers in either commit.
+  - ~94 + ~556 authored lines (~60% tests), second commit over heuristic, kept whole.
+  - Delivered: eviction keeps error-bearing words over clean ones (R3-001 of T2 fixed); `generate_weak_word_drill(word_stats, weak_keys)` with seeded-testable core (`_with(&mut impl Rng)`), rank = error_rate desc then latency per char, weighted rounds, no adjacent duplicates, pool padding (Tier4 excluded) when < 5 failing words; old `generate_weak_key_drill` removed; `App::start_adaptive_drill` rewired; adaptive-drill app test now types a known wrong stroke and checks reloaded word_stats (R3-002 of T2 fixed).
+  - Decisions: >=5 failing words -> weighted rounds only (12-15 words, no padding); <5 -> padded to 20; padding cycles matching words if too few; ranking skips empty/whitespace keys.
+
 ## Next step
-Assess T2 review tier (base c0698f4), then dispatch writer for T3.
+Assess T3 review tier (base 43531bf), then dispatch writer for T4.
