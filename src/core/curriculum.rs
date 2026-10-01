@@ -2891,6 +2891,40 @@ mod tests {
         );
     }
 
+    /// Hand-edited progress files can carry an empty key or a key with
+    /// whitespace; both would corrupt the space-joined drill text (empty
+    /// tokens / words split in two), so neither may ever be ranked or drilled.
+    #[test]
+    fn test_rank_failing_words_skips_empty_and_whitespace_keys() {
+        let stats = stats_of(&[
+            ("", stat(9, 3, 900)),
+            ("hola mundo", stat(8, 3, 900)),
+            ("tab\tbed", stat(7, 3, 900)),
+            ("casa", stat(2, 3, 900)),
+        ]);
+
+        let ranked = Curriculum::rank_failing_words(&stats);
+
+        assert_eq!(ranked, vec!["casa"]);
+
+        for seed in 0..50 {
+            let mut rng = StdRng::seed_from_u64(seed);
+            let drill = Curriculum::generate_weak_word_drill_with(&stats, &['a'], &mut rng);
+            let toks = tokens(&drill.text);
+            assert!(
+                toks.contains(&"casa"),
+                "seed {seed}: the valid failing word must be drilled in {:?}",
+                drill.text
+            );
+            assert!(
+                toks.iter()
+                    .all(|t| !t.is_empty() && !t.chars().any(char::is_whitespace)),
+                "seed {seed}: empty or whitespace-bearing token in {:?}",
+                drill.text
+            );
+        }
+    }
+
     #[test]
     fn test_weak_word_drill_most_failed_word_appears_most_often() {
         let stats = eight_failing_words();
