@@ -46,7 +46,7 @@ the drill cannot know which real words are hard.
 - [x] T1 (core) `WordStat` model + `UserProgress.word_stats` (serde default) + pure `word_observations` fn for typing and dictation streams. Route: delegated writer. Tests first.
 - [x] T2 (storage+app) Merge word observations in `record_session_result`; wire both call sites (typing, dictation). Also: normalize word keys (lowercase, trim non-alphanumeric edges, skip empties), cap `word_stats` (deterministic eviction), and pin the engine retry behaviour with a real-TypingEngine test (review R3-001/R3-002). Route: delegated writer.
 - [x] T3 (core+app) (a) fix eviction ranking so error-bearing words are never evicted before clean ones (review R3-001 of T2); (b) `generate_weak_word_drill(word_stats, weak_keys)`: rank failing words, weighted repeat, fallback to real pool words with weak letters; new title/description; rewire `App::start_adaptive_drill`; update the tests that break (curriculum.rs:2675, app.rs:1525); (c) strengthen adaptive-drill app test to type a known wrong stroke and check reloaded word_stats (review R3-002 of T2). Route: delegated writer.
-- [ ] T4 (ui/docs) Update ui.rs strings (1013 start-drill label, 1120 history label), README (54, 74); visual check of the TUI. Route: delegated writer.
+- [x] T4 (ui/docs) Also add the missing test for `rank_failing_words` skipping empty/whitespace keys (review R3-001 of T3). Update ui.rs strings (1013 start-drill label, 1120 history label), README (54, 74); visual check of the TUI. Route: delegated writer.
 
 ## Acceptance criteria
 - After typing a word wrongly, its `word_stats` entry has errors > 0 and survives save/load.
@@ -81,5 +81,14 @@ Writer trigger fired (2+ non-trivial files per task: model.rs, repository.rs, cu
   - Delivered: eviction keeps error-bearing words over clean ones (R3-001 of T2 fixed); `generate_weak_word_drill(word_stats, weak_keys)` with seeded-testable core (`_with(&mut impl Rng)`), rank = error_rate desc then latency per char, weighted rounds, no adjacent duplicates, pool padding (Tier4 excluded) when < 5 failing words; old `generate_weak_key_drill` removed; `App::start_adaptive_drill` rewired; adaptive-drill app test now types a known wrong stroke and checks reloaded word_stats (R3-002 of T2 fixed).
   - Decisions: >=5 failing words -> weighted rounds only (12-15 words, no padding); <5 -> padded to 20; padding cycles matching words if too few; ranking skips empty/whitespace keys.
 
+- T3 review (slice 59279af+306587f+docs, base=43531bf, 665 lines): medium, consent granted by user, native review-reliability APPROVED, authority burned (lineage review-0464a54a66a85355). Reviewed boundary is now c5e58cd.
+  - Advisory finding accepted into T4: R3-001 (SUGGESTION) no test covers `rank_failing_words` skipping empty/whitespace keys -> add test (empty key + key with a space, both errors > 0, never in output; every drill token non-empty).
+
+- T4 done, commits d993c0a (test(core): guard word ranking against empty and spaced keys) and faa066e (feat(tui): relabel adaptive drill as weak words). Route: delegated writer.
+  - Guard test: passes with the filter; with the filter temporarily removed it FAILED (`left: ["", "hola mundo", "tab\tbed", "casa"]`, `right: ["casa"]`); restored -> passes. UI label tests failed on old text, pass on new.
+  - GREEN: cargo test 341 passed / 0 failed (parent spot check confirmed), clippy --all-targets -D warnings clean, fmt --check clean, no trailers.
+  - Visual check (pty+pyte, temp XDG dir, real progress.json untouched): seeded word_stats camión/mundo/playa/hola; drill title `Drill Adaptativo: Palabras Débiles`; text `camión playa mundo playa mundo camión mundo camión extraordinario salsa hada señal arquitectura avión perspectiva calle también persistencia aprendizaje soda` (failing words first and repeated, hola absent, real-word padding since <5 failing). New labels render at 120x40 without overflow.
+  - Open (pre-existing, not ours): at 80x24 the stats footer is clipped ("Comand…"); old label had same length. Left for the user to decide.
+
 ## Next step
-Assess T3 review tier (base 43531bf), then dispatch writer for T4.
+Assess T4 review tier (base c5e58cd); close.
