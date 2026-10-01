@@ -44,7 +44,7 @@ the drill cannot know which real words are hard.
 
 ## Tasks
 - [x] T1 (core) `WordStat` model + `UserProgress.word_stats` (serde default) + pure `word_observations` fn for typing and dictation streams. Route: delegated writer. Tests first.
-- [ ] T2 (storage+app) Merge word observations in `record_session_result`; wire both call sites (typing, dictation). Route: delegated writer.
+- [x] T2 (storage+app) Merge word observations in `record_session_result`; wire both call sites (typing, dictation). Also: normalize word keys (lowercase, trim non-alphanumeric edges, skip empties), cap `word_stats` (deterministic eviction), and pin the engine retry behaviour with a real-TypingEngine test (review R3-001/R3-002). Route: delegated writer.
 - [ ] T3 (core) `generate_weak_word_drill`: rank failing words, weighted repeat, fallback to pool words with weak letters; rewire `App::start_adaptive_drill`. Route: delegated writer.
 - [ ] T4 (ui/docs) Update drill title/description, ui.rs strings (1013, 1120), README (54, 74), obsolete tests (curriculum.rs:2675, app.rs:1525). Route: delegated writer.
 
@@ -63,7 +63,14 @@ Writer trigger fired (2+ non-trivial files per task: model.rs, repository.rs, cu
   - RED observed (`cargo test word`: 34 compile errors before implementation); GREEN: cargo test 303 passed / 0 failed (baseline 290 + 13 new), clippy --all-targets -D warnings clean, fmt --check clean. Parent spot check: cargo test 303 passed, commit message has no trailer.
   - 457 insertions (~250 are tests); over the ~400 heuristic, kept whole (no artificial split).
   - Decisions: WordStat.error_rate = errors per attempt (%, can exceed 100). Typing: a wrong stroke at a space position counts as error for the finishing word; boundary space belongs to no word and its latency is not attributed. Dictation: incomplete trailing word is dropped; non-alphabetic words consume strokes but emit nothing. Word text is kept exact (`hola,` is its own key) -> T3 should trim punctuation before ranking, or T2 should normalize on merge.
-  - Review tier: pending assessment (doc was untracked; committed with this update).
+  - Review (slice T1 + doc, base=master, 526 lines): tier medium, due=slice_budget_reached, consent granted by user, native review-reliability APPROVED, authority burned (lineage review-13d1a5f6c32fdd62). Reviewed boundary is now c0698f4.
+  - Advisory findings accepted into T2 scope (own-feature design, not scope creep): R3-001 (WARNING) typing word split relies on the engine never advancing on wrong strokes -> pin with a test driving the real TypingEngine; R3-002 (SUGGESTION) word_stats unbounded and keyed by exact text -> normalize keys + cap entries with deterministic eviction, with tests.
+
+- T2 done, commit 2ab9d22 (feat(storage): persist per-word stats with normalized capped keys). Route: delegated writer.
+  - RED observed (28 compile errors: missing normalize_word_key/MAX_WORD_STATS, record_session_result arity); GREEN: cargo test 324 passed / 0 failed (parent spot check confirmed), clippy --all-targets -D warnings clean, fmt --check clean. No trailer in commit message.
+  - ~555 authored lines (~400 tests), over heuristic, kept whole.
+  - Delivered: record_session_result takes &[WordObservation]; typing/adaptive/dictation callers wired; words::normalize_word_key; MAX_WORD_STATS=500 deterministic eviction (fewest attempts, fewest errors, lexicographic; never evicts current-call words); real TypingEngine/DictationEngine tests pin the retry behaviour (R3-001); save/load + legacy-file tests.
+  - Open decision: one call merging >500 distinct words may exceed the cap (documented; unrealistic per session).
 
 ## Next step
-Dispatch writer for T2.
+Assess T2 review tier (base c0698f4), then dispatch writer for T3.
