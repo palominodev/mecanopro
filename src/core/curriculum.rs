@@ -1,12 +1,16 @@
-use crate::core::model::{Lesson, PlanetStatus, Section, Tier, TierProgress, UserProgress};
+use crate::core::model::{
+    Lesson, PlanetStatus, Section, Tier, TierProgress, UserProgress, WordStat,
+};
 use rand::seq::SliceRandom;
-use rand::thread_rng;
+use rand::{Rng, thread_rng};
+use std::collections::{HashMap, HashSet};
 
 pub struct Curriculum;
 
 impl Curriculum {
     /// Id of the dynamically generated adaptive-drill lesson (see
-    /// [`Self::generate_weak_key_drill`]). It is absent from
+    /// [`Self::generate_weak_word_drill`], built from the words the user
+    /// fails most). It is absent from
     /// [`Self::all_lessons`] by construction, which is what lets
     /// `tui::app::App::flat_index_of` and downstream session-kind routing
     /// tell an adaptive drill apart from a real curriculum lesson.
@@ -2416,45 +2420,101 @@ impl Curriculum {
         ]
     }
 
-    /// Dynamically create an adaptive drill targeting specific weak characters
-    pub fn generate_weak_key_drill(weak_keys: &[char]) -> Lesson {
-        let keys = if weak_keys.is_empty() {
-            &['a', 's', 'd', 'f', 'j', 'k', 'l', 'ñ']
-        } else {
-            weak_keys
-        };
+    /// Dynamically creates the adaptive drill: real words, never letter soup.
+    ///
+    /// Words the user fails most (see [`Self::rank_failing_words`]) lead the
+    /// drill and are repeated by rank. With fewer than
+    /// `DRILL_MIN_FAILING_WORDS` failing words, the drill is padded with real
+    /// Spanish pool words that contain a weak key (see [`padding_pool`]).
+    pub fn generate_weak_word_drill(
+        word_stats: &HashMap<String, WordStat>,
+        weak_keys: &[char],
+    ) -> Lesson {
+        Self::generate_weak_word_drill_with(word_stats, weak_keys, &mut thread_rng())
+    }
 
-        let mut rng = thread_rng();
-        let mut words = Vec::new();
+    /// Same as [`Self::generate_weak_word_drill`] with an injectable RNG, so
+    /// the composition is reproducible under a seeded generator. Ranking is
+    /// fully deterministic; randomness only shuffles words within a round and
+    /// orders the padding pool.
+    fn generate_weak_word_drill_with<R: Rng + ?Sized>(
+        word_stats: &HashMap<String, WordStat>,
+        weak_keys: &[char],
+        rng: &mut R,
+    ) -> Lesson {
+        let top: Vec<&str> = Self::rank_failing_words(word_stats)
+            .into_iter()
+            .take(DRILL_RANK_WEIGHTS.len())
+            .collect();
 
-        for _ in 0..15 {
-            let len = (3..=6)
-                .collect::<Vec<_>>()
-                .choose(&mut rng)
-                .copied()
-                .unwrap_or(4);
-            let word: String = (0..len)
-                .map(|_| *keys.choose(&mut rng).unwrap_or(&'a'))
+        // Round `r` holds every top word whose weight exceeds `r`, so higher
+        // ranks recur in more rounds while each round is a shuffled pass over
+        // distinct words.
+        let mut words: Vec<&str> = Vec::new();
+        for round in 0..DRILL_RANK_WEIGHTS[0] {
+            let mut pass: Vec<&str> = top
+                .iter()
+                .zip(DRILL_RANK_WEIGHTS)
+                .filter(|(_, weight)| *weight > round)
+                .map(|(word, _)| *word)
                 .collect();
-            words.push(word);
+            pass.shuffle(rng);
+            words.extend(pass);
         }
 
-        let drill_text = words.join(" ");
+        if top.len() < DRILL_MIN_FAILING_WORDS {
+            let exclude: HashSet<&str> = top.iter().copied().collect();
+            let mut pool = padding_pool(weak_keys, &exclude);
+            pool.shuffle(rng);
+            let needed = DRILL_TARGET_WORDS.saturating_sub(words.len());
+            words.extend(pool.iter().copied().cycle().take(needed));
+        }
+
+        separate_adjacent_duplicates(&mut words);
 
         Lesson {
             id: Self::ADAPTIVE_DRILL_ID.into(),
-            title: "Drill Adaptativo: Teclas Débiles".into(),
+            title: "Drill Adaptativo: Palabras Débiles".into(),
             tier: Tier::Tier7GrandMaster,
             // Dynamic drills are not part of the ordered curriculum, so they
             // belong to no section.
             section_id: String::new(),
-            description:
-                "Ejercicio generado dinámicamente enfocado en tus teclas con mayor tasa de error."
-                    .into(),
-            text: drill_text,
+            description: "Ejercicio generado a partir de las palabras que más fallas, \
+                          repitiendo las más difíciles."
+                .into(),
+            text: words.join(" "),
             target_cpm: 300.0,
             min_accuracy: 96.0,
         }
+    }
+
+    /// Words with at least one recorded error, hardest first: error rate
+    /// descending, then average latency per character descending (a word's
+    /// latency is a sum of stroke latencies, so it is normalized by length to
+    /// avoid favoring long words), then lexicographic for determinism. Keys
+    /// that are empty or contain whitespace (hand-edited files) are skipped
+    /// because they would break the space-joined drill text.
+    fn rank_failing_words(word_stats: &HashMap<String, WordStat>) -> Vec<&str> {
+        let mut ranked: Vec<(&str, f64, f64)> = word_stats
+            .iter()
+            .filter(|(word, stat)| {
+                stat.errors > 0 && !word.is_empty() && !word.chars().any(char::is_whitespace)
+            })
+            .map(|(word, stat)| {
+                let chars = word.chars().count().max(1) as f64;
+                (
+                    word.as_str(),
+                    stat.error_rate(),
+                    stat.avg_latency_ms() / chars,
+                )
+            })
+            .collect();
+        ranked.sort_by(|a, b| {
+            b.1.total_cmp(&a.1)
+                .then_with(|| b.2.total_cmp(&a.2))
+                .then_with(|| a.0.cmp(b.0))
+        });
+        ranked.into_iter().map(|(word, _, _)| word).collect()
     }
 
     pub fn dictation_word_pool(tier: Tier) -> &'static [&'static str] {
@@ -2570,11 +2630,83 @@ impl Curriculum {
     }
 }
 
+/// Words contributed per rank in the adaptive drill: the hardest word
+/// appears three times, the weakest of the top eight once.
+const DRILL_RANK_WEIGHTS: [usize; 8] = [3, 3, 2, 2, 2, 1, 1, 1];
+/// Below this many failing words the drill is padded with pool words.
+const DRILL_MIN_FAILING_WORDS: usize = 5;
+/// Approximate drill length (in words) when padding is needed.
+const DRILL_TARGET_WORDS: usize = 20;
+
+/// Distinct dictation-pool words from `tiers`, in pool order.
+fn pool_words(tiers: &[Tier]) -> Vec<&'static str> {
+    let mut seen = HashSet::new();
+    tiers
+        .iter()
+        .flat_map(|tier| Curriculum::dictation_word_pool(*tier).iter().copied())
+        .filter(|word| seen.insert(*word))
+        .collect()
+}
+
+/// Real Spanish words used to pad the adaptive drill: pool words (Tier4 code
+/// tokens excluded) containing at least one weak key, case-insensitively,
+/// with `exclude` (the failing words) removed. If `weak_keys` is empty or
+/// nothing matches, falls back to the Tier1/Tier2 words.
+fn padding_pool(weak_keys: &[char], exclude: &HashSet<&str>) -> Vec<&'static str> {
+    let real_tiers: Vec<Tier> = Tier::ALL
+        .iter()
+        .copied()
+        .filter(|tier| *tier != Tier::Tier4NumbersAndSymbols)
+        .collect();
+    let weak: Vec<char> = weak_keys.iter().flat_map(|c| c.to_lowercase()).collect();
+    let matching: Vec<&'static str> = pool_words(&real_tiers)
+        .into_iter()
+        .filter(|word| !exclude.contains(word))
+        .filter(|word| {
+            word.chars()
+                .flat_map(char::to_lowercase)
+                .any(|c| weak.contains(&c))
+        })
+        .collect();
+    if !matching.is_empty() {
+        return matching;
+    }
+    pool_words(&[Tier::Tier1Foundation, Tier::Tier2FullAlphabet])
+        .into_iter()
+        .filter(|word| !exclude.contains(word))
+        .collect()
+}
+
+/// Whether `words[i]` differs from both of its neighbours.
+fn differs_from_neighbours(words: &[&str], i: usize) -> bool {
+    (i == 0 || words[i] != words[i - 1]) && (i + 1 >= words.len() || words[i] != words[i + 1])
+}
+
+/// Breaks up back-to-back repeats by swapping the second word with a later
+/// one, when such a swap exists. Counts per word are preserved, and only
+/// later positions are touched so the leading (failing) words stay first.
+fn separate_adjacent_duplicates(words: &mut [&str]) {
+    for i in 1..words.len() {
+        if words[i] != words[i - 1] {
+            continue;
+        }
+        for j in (i + 1)..words.len() {
+            words.swap(i, j);
+            if differs_from_neighbours(words, i) && differs_from_neighbours(words, j) {
+                break;
+            }
+            words.swap(i, j);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::model::{BestScore, PlanetStatus, UserProgress};
-    use std::collections::HashMap;
+    use crate::core::model::{BestScore, PlanetStatus, UserProgress, WordStat};
+    use rand::SeedableRng;
+    use rand::rngs::StdRng;
+    use std::collections::{HashMap, HashSet};
 
     #[test]
     fn test_tier_progress_counts_total_attempted_passed() {
@@ -2672,11 +2804,282 @@ mod tests {
         assert!(all.iter().any(|l| l.tier == Tier::Tier7GrandMaster));
     }
 
+    /// `(errors, attempts, total_latency_ms)` -> `WordStat`.
+    fn stat(errors: usize, attempts: usize, total_latency_ms: u64) -> WordStat {
+        WordStat {
+            attempts,
+            errors,
+            total_latency_ms,
+        }
+    }
+
+    fn stats_of(entries: &[(&str, WordStat)]) -> HashMap<String, WordStat> {
+        entries
+            .iter()
+            .map(|(word, stat)| ((*word).to_string(), stat.clone()))
+            .collect()
+    }
+
+    /// Every real (non-Tier4) pool word.
+    fn real_pool_words() -> HashSet<&'static str> {
+        Tier::ALL
+            .iter()
+            .filter(|t| **t != Tier::Tier4NumbersAndSymbols)
+            .flat_map(|t| Curriculum::dictation_word_pool(*t).iter().copied())
+            .collect()
+    }
+
+    fn tokens(text: &str) -> Vec<&str> {
+        text.split(' ').collect()
+    }
+
+    /// Eight failing words with strictly decreasing error rates.
+    fn eight_failing_words() -> HashMap<String, WordStat> {
+        stats_of(&[
+            ("uno", stat(9, 3, 900)),
+            ("dos", stat(8, 3, 900)),
+            ("tres", stat(7, 3, 900)),
+            ("cuatro", stat(6, 3, 900)),
+            ("cinco", stat(5, 3, 900)),
+            ("seis", stat(4, 3, 900)),
+            ("siete", stat(3, 3, 900)),
+            ("ocho", stat(2, 3, 900)),
+            ("clean", stat(0, 9, 900)),
+        ])
+    }
+
     #[test]
-    fn test_adaptive_drill_generation() {
-        let drill = Curriculum::generate_weak_key_drill(&['p', 'q', 'z']);
+    fn test_rank_failing_words_orders_by_error_rate_then_per_char_latency_then_alpha() {
+        let stats = stats_of(&[
+            ("high", stat(4, 2, 100)),      // 200% error rate
+            ("clean", stat(0, 10, 99_999)), // never a candidate
+            ("mid", stat(2, 4, 100)),       // 50%, 25 ms / 3 chars = 8.3 per char
+            ("ninechars", stat(1, 2, 400)), // 50%, 200 ms / 9 chars = 22.2 per char
+            ("ab", stat(1, 2, 400)),        // 50%, 200 ms / 2 chars = 100 per char
+            ("abcdefgh", stat(1, 2, 800)),  // 50%, 400 ms / 8 chars = 50 per char
+            ("zeta", stat(1, 2, 400)),      // 50%, 200 ms / 4 chars = 50 per char
+            ("alpha", stat(1, 2, 500)),     // 50%, 250 ms / 5 chars = 50 per char
+        ]);
+
+        let ranked = Curriculum::rank_failing_words(&stats);
+
+        // Error rate desc, then latency per character desc, then
+        // alphabetical for the exact 50 ms/char tie.
+        assert_eq!(
+            ranked,
+            vec![
+                "high",
+                "ab",
+                "abcdefgh",
+                "alpha",
+                "zeta",
+                "ninechars",
+                "mid"
+            ]
+        );
+    }
+
+    #[test]
+    fn test_rank_failing_words_does_not_favor_long_words_by_total_latency() {
+        // Same error rate; the long word's total latency is larger but its
+        // per-character latency is lower, so the short word ranks first.
+        let stats = stats_of(&[("abcdefgh", stat(1, 1, 800)), ("ab", stat(1, 1, 400))]);
+
+        assert_eq!(
+            Curriculum::rank_failing_words(&stats),
+            vec!["ab", "abcdefgh"]
+        );
+    }
+
+    #[test]
+    fn test_weak_word_drill_most_failed_word_appears_most_often() {
+        let stats = eight_failing_words();
+        let mut rng = StdRng::seed_from_u64(7);
+
+        let drill = Curriculum::generate_weak_word_drill_with(&stats, &['a'], &mut rng);
+
+        let toks = tokens(&drill.text);
+        let count = |w: &str| toks.iter().filter(|t| **t == w).count();
+        assert_eq!(count("uno"), 3);
+        assert_eq!(count("dos"), 3);
+        assert_eq!(count("tres"), 2);
+        assert_eq!(count("ocho"), 1);
+        assert!(
+            !toks.contains(&"clean"),
+            "clean words never enter the drill"
+        );
+        assert_eq!(
+            toks.len(),
+            15,
+            "8 failing words with weights 3,3,2,2,2,1,1,1"
+        );
+    }
+
+    #[test]
+    fn test_weak_word_drill_never_repeats_a_word_back_to_back_when_avoidable() {
+        let stats = eight_failing_words();
+        for seed in 0..200 {
+            let mut rng = StdRng::seed_from_u64(seed);
+            let drill = Curriculum::generate_weak_word_drill_with(&stats, &['a'], &mut rng);
+            let toks = tokens(&drill.text);
+            assert!(
+                toks.windows(2).all(|w| w[0] != w[1]),
+                "seed {seed}: adjacent duplicate in {:?}",
+                drill.text
+            );
+        }
+    }
+
+    #[test]
+    fn test_weak_word_drill_spreads_a_lone_failing_word_among_padding() {
+        let stats = stats_of(&[("casa", stat(2, 2, 500))]);
+        for seed in 0..100 {
+            let mut rng = StdRng::seed_from_u64(seed);
+            let drill = Curriculum::generate_weak_word_drill_with(&stats, &['a'], &mut rng);
+            let toks = tokens(&drill.text);
+            assert_eq!(toks.iter().filter(|t| **t == "casa").count(), 3);
+            assert!(
+                toks.windows(2).all(|w| w[0] != w[1]),
+                "seed {seed}: adjacent duplicate in {:?}",
+                drill.text
+            );
+        }
+    }
+
+    #[test]
+    fn test_weak_word_drill_pads_with_real_pool_words_containing_weak_letters() {
+        let stats = stats_of(&[("casa", stat(1, 1, 300)), ("sala", stat(1, 2, 300))]);
+        let pool = real_pool_words();
+        let mut rng = StdRng::seed_from_u64(3);
+
+        let drill = Curriculum::generate_weak_word_drill_with(&stats, &['ñ', 'Z'], &mut rng);
+
+        let toks = tokens(&drill.text);
+        assert!(toks.len() >= 10);
+        let padding: Vec<&&str> = toks
+            .iter()
+            .filter(|t| **t != "casa" && **t != "sala")
+            .collect();
+        assert!(!padding.is_empty(), "two failing words need padding");
+        for word in padding {
+            assert!(pool.contains(*word), "{word:?} is not a real pool word");
+            assert!(
+                word.chars().any(|c| c == 'ñ' || c == 'z'),
+                "{word:?} must contain a weak key (case-insensitive)"
+            );
+        }
+        // Failing words come first and most often.
+        assert!(toks[0] == "casa" || toks[0] == "sala");
+        let count = |w: &str| toks.iter().filter(|t| **t == w).count();
+        assert_eq!((count("casa"), count("sala")), (3, 3));
+    }
+
+    #[test]
+    fn test_weak_word_drill_fallback_with_empty_stats_uses_only_pool_words_with_weak_keys() {
+        let pool = real_pool_words();
+        let mut rng = StdRng::seed_from_u64(11);
+
+        let drill =
+            Curriculum::generate_weak_word_drill_with(&HashMap::new(), &['p', 'q'], &mut rng);
+
+        let toks = tokens(&drill.text);
+        assert!(toks.len() >= 5);
+        for word in toks {
+            assert!(pool.contains(word), "{word:?} is not a real pool word");
+            assert!(
+                word.chars().any(|c| c == 'p' || c == 'q'),
+                "{word:?} must contain a weak key"
+            );
+        }
+    }
+
+    #[test]
+    fn test_weak_word_drill_never_emits_tier4_code_tokens() {
+        // Only Tier4 tokens contain '_' or digits; excluding them leaves no
+        // match, so the drill must fall back to Tier1/Tier2 words.
+        let tier1_2: HashSet<&str> = [Tier::Tier1Foundation, Tier::Tier2FullAlphabet]
+            .iter()
+            .flat_map(|t| Curriculum::dictation_word_pool(*t).iter().copied())
+            .collect();
+        for weak in [vec!['_', '1', '0'], vec!['_'], vec!['t']] {
+            let mut rng = StdRng::seed_from_u64(5);
+            let drill = Curriculum::generate_weak_word_drill_with(&HashMap::new(), &weak, &mut rng);
+            for word in tokens(&drill.text) {
+                assert!(
+                    !word.contains('_') && !word.chars().any(|c| c.is_ascii_digit()),
+                    "Tier4 token {word:?} leaked into the drill"
+                );
+                if weak == vec!['_', '1', '0'] || weak == vec!['_'] {
+                    assert!(tier1_2.contains(word), "{word:?} should be a Tier1/2 word");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_weak_word_drill_empty_stats_and_empty_weak_keys_still_yields_real_words() {
+        let pool = real_pool_words();
+        let tier1_2: HashSet<&str> = [Tier::Tier1Foundation, Tier::Tier2FullAlphabet]
+            .iter()
+            .flat_map(|t| Curriculum::dictation_word_pool(*t).iter().copied())
+            .collect();
+        let mut rng = StdRng::seed_from_u64(1);
+
+        let drill = Curriculum::generate_weak_word_drill_with(&HashMap::new(), &[], &mut rng);
+
+        let toks = tokens(&drill.text);
+        assert!(toks.len() >= 5);
+        for word in toks {
+            assert!(pool.contains(word));
+            assert!(tier1_2.contains(word), "{word:?} should be a Tier1/2 word");
+        }
+    }
+
+    #[test]
+    fn test_weak_word_drill_is_deterministic_for_a_seeded_rng() {
+        let stats = eight_failing_words();
+        let a = Curriculum::generate_weak_word_drill_with(
+            &stats,
+            &['a', 'e'],
+            &mut StdRng::seed_from_u64(42),
+        );
+        let b = Curriculum::generate_weak_word_drill_with(
+            &stats,
+            &['a', 'e'],
+            &mut StdRng::seed_from_u64(42),
+        );
+
+        assert_eq!(a.text, b.text);
+    }
+
+    #[test]
+    fn test_weak_word_drill_padding_never_duplicates_a_failing_word() {
+        // "casa" is also a Tier1 pool word containing the weak letter 'a'.
+        let stats = stats_of(&[("casa", stat(3, 3, 300))]);
+        for seed in 0..50 {
+            let mut rng = StdRng::seed_from_u64(seed);
+            let drill = Curriculum::generate_weak_word_drill_with(&stats, &['a'], &mut rng);
+            let toks = tokens(&drill.text);
+            assert_eq!(
+                toks.iter().filter(|t| **t == "casa").count(),
+                3,
+                "seed {seed}: padding must not add extra copies of a failing word"
+            );
+        }
+    }
+
+    #[test]
+    fn test_weak_word_drill_lesson_metadata() {
+        let drill = Curriculum::generate_weak_word_drill(&HashMap::new(), &['a']);
+
+        assert_eq!(drill.id, Curriculum::ADAPTIVE_DRILL_ID);
+        assert_eq!(drill.title, "Drill Adaptativo: Palabras Débiles");
+        assert!(drill.description.contains("palabras"));
+        assert_eq!(drill.tier, Tier::Tier7GrandMaster);
+        assert_eq!(drill.target_cpm, 300.0);
+        assert_eq!(drill.min_accuracy, 96.0);
+        assert!(drill.section_id.is_empty());
         assert!(!drill.text.is_empty());
-        assert!(drill.text.chars().any(|c| c == 'p' || c == 'q' || c == 'z'));
     }
 
     #[test]

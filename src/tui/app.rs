@@ -225,7 +225,8 @@ impl App {
             .map(|(&c, _)| c)
             .collect();
 
-        let drill = Curriculum::generate_weak_key_drill(&weak_keys);
+        let drill =
+            Curriculum::generate_weak_word_drill(&self.user_progress.word_stats, &weak_keys);
         self.start_practice(drill);
     }
 
@@ -254,7 +255,7 @@ impl App {
                 error_count: metrics.error_count,
             };
             // An adaptive drill is absent from `available_lessons()` by
-            // construction (`Curriculum::generate_weak_key_drill`), so its
+            // construction (`Curriculum::generate_weak_word_drill`), so its
             // id is the only signal `finish_current_session` has to tell it
             // apart from a real curriculum lesson. Routing it as
             // `SessionKind::Drill` here is the adaptive-drill fix: a drill
@@ -1545,23 +1546,68 @@ mod tests {
     }
 
     /// An adaptive drill finishes through the same path, so it feeds
-    /// `word_stats` too.
+    /// `word_stats` too: a known wrong stroke at the start of the drill must
+    /// be attributed to the first drill word, and survive a reload from the
+    /// repository file (never the real XDG one).
     #[test]
     fn test_finish_adaptive_drill_session_records_word_stats() {
         let dir = tempfile::tempdir().unwrap();
-        let repo = ProgressRepository::with_path(dir.path().join("progress.json"));
-        let mut app = App::with_repository(repo);
+        let path = dir.path().join("progress.json");
+        let mut app = App::with_repository(ProgressRepository::with_path(path.clone()));
         app.user_progress = UserProgress::default();
 
         app.start_adaptive_drill();
         let text = app.current_engine.as_ref().unwrap().lesson.text.clone();
+        let first_word = text.split(' ').next().unwrap().to_string();
+        // '#' is never part of a drill word, so this stroke is always wrong.
+        app.handle_key_input('#');
         for ch in text.chars() {
             app.handle_key_input(ch);
         }
 
-        assert!(
-            !app.user_progress.word_stats.is_empty(),
-            "a finished adaptive drill must record word stats"
+        assert_eq!(app.current_view, CurrentView::Summary);
+        let reloaded = ProgressRepository::with_path(path).load();
+        let key = crate::core::words::normalize_word_key(&first_word).unwrap();
+        assert_eq!(
+            reloaded.word_stats[&key].errors, 1,
+            "the wrong stroke must be attributed to the first drill word {key:?}"
+        );
+        let total_errors: usize = reloaded.word_stats.values().map(|s| s.errors).sum();
+        assert_eq!(total_errors, 1, "no other word may carry an error");
+        assert_eq!(reloaded.word_stats, app.user_progress.word_stats);
+    }
+
+    /// The adaptive drill is built from the words the user fails most: after
+    /// a failed word is persisted, the next drill starts from real words and
+    /// contains that word.
+    #[test]
+    fn test_start_adaptive_drill_uses_failing_words_from_progress() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = ProgressRepository::with_path(dir.path().join("progress.json"));
+        let mut app = App::with_repository(repo);
+        app.user_progress = UserProgress::default();
+        app.user_progress.word_stats.insert(
+            "zumbido".to_string(),
+            crate::core::model::WordStat {
+                attempts: 2,
+                errors: 4,
+                total_latency_ms: 1_000,
+            },
+        );
+
+        app.start_adaptive_drill();
+
+        let engine = app.current_engine.as_ref().unwrap();
+        assert_eq!(engine.lesson.id, Curriculum::ADAPTIVE_DRILL_ID);
+        assert_eq!(
+            engine
+                .lesson
+                .text
+                .split(' ')
+                .filter(|w| *w == "zumbido")
+                .count(),
+            3,
+            "the failing word must be repeated in the drill"
         );
     }
 
@@ -1597,7 +1643,7 @@ mod tests {
     /// (revision 2, new): drives the full causal chain end-to-end --
     /// dictation keystrokes -> `record_session_result`'s `key_stats`
     /// accrual -> `start_adaptive_drill`'s weak-key filter (error rate or
-    /// latency threshold) -> `Curriculum::generate_weak_key_drill`. Builds
+    /// latency threshold) -> `Curriculum::generate_weak_word_drill`. Builds
     /// the `DictationEngine` directly with a fixed two-word list (instead
     /// of `App::start_dictation`'s randomized tier pool) so the exact
     /// keystroke sequence -- and therefore which single key crosses the
@@ -1664,10 +1710,27 @@ mod tests {
             !drill_text.is_empty(),
             "generated drill text must not be empty"
         );
-        assert!(
-            drill_text.chars().all(|c| c == 'a' || c == ' '),
-            "drill text must target only the weak key 'a', got: {drill_text:?}"
-        );
+        // The dictated "casa" carried the error, so it is the failing word:
+        // it leads the drill and appears most often. Every other token is a
+        // real pool word containing the weak key 'a'.
+        let real_pool: std::collections::HashSet<&str> = Tier::ALL
+            .iter()
+            .filter(|t| **t != Tier::Tier4NumbersAndSymbols)
+            .flat_map(|t| Curriculum::dictation_word_pool(*t).iter().copied())
+            .collect();
+        let tokens: Vec<&str> = drill_text.split(' ').collect();
+        let count = |w: &str| tokens.iter().filter(|t| **t == w).count();
+        assert_eq!(count("casa"), 3, "failing word repeated: {drill_text:?}");
+        for token in &tokens {
+            assert!(
+                *token == "casa" || real_pool.contains(token),
+                "{token:?} is neither the failing word nor a real pool word"
+            );
+            assert!(
+                token.contains('a'),
+                "{token:?} must contain the weak key 'a'"
+            );
+        }
     }
 
     #[test]
