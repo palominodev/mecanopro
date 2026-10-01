@@ -1009,7 +1009,7 @@ fn render_stats(f: &mut Frame, app: &App) {
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
-            "Iniciar Drill de Teclas Débiles   ",
+            "Iniciar Drill: Palabras Débiles   ",
             Style::default().fg(Theme::TEXT),
         ),
         Span::styled(
@@ -1116,7 +1116,7 @@ fn session_history_line(record: &SessionRecord) -> Line<'static> {
         }
         SessionKind::Drill => (
             "DRILL".to_string(),
-            "Práctica de teclas débiles".to_string(),
+            "Práctica de palabras débiles".to_string(),
         ),
         SessionKind::Dictation {
             completed_words,
@@ -2590,6 +2590,45 @@ mod tests {
         assert!(
             !lower.contains("importar"),
             "must not render an import control:\n{rendered}"
+        );
+    }
+
+    #[test]
+    fn test_stats_view_footer_offers_weak_words_drill() {
+        let mut app = App::new();
+        app.user_progress = UserProgress::default();
+        app.current_view = CurrentView::Stats;
+
+        let rendered = render_to_string(&app, 120, 40);
+
+        assert!(
+            rendered.contains("Iniciar Drill: Palabras Débiles"),
+            "expected the weak-words drill action in:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains("Teclas Débiles"),
+            "the drill is word-based now, not key-based:\n{rendered}"
+        );
+    }
+
+    #[test]
+    fn test_history_view_drill_entry_mentions_weak_words() {
+        let mut app = App::new();
+        app.user_progress = UserProgress::default();
+        app.user_progress
+            .sessions
+            .push(make_session_record(SessionKind::Drill, 1_700_000_000));
+        app.current_view = CurrentView::History;
+
+        let rendered = render_to_string(&app, 120, 30);
+
+        assert!(
+            rendered.contains("Práctica de palabras débiles"),
+            "expected the word-based drill label in:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains("teclas débiles"),
+            "the drill is word-based now, not key-based:\n{rendered}"
         );
     }
 }

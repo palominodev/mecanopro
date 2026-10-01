@@ -51,12 +51,12 @@ MecanoPro is a lightweight, distraction-free **Terminal User Interface (TUI)** b
 - **Diagnostics**:
   - Auditory reaction latency per word, in the dictation summary.
   - Per-key attempt/error/latency statistics, surfaced as a weak-key table.
-  - Adaptive drills generated from your weakest keys, fed by both typing and dictation.
+  - Adaptive drills that review the words you fail most (with real-word fallback while there is no word history yet), fed by both typing and dictation.
 
 ### 4. Persistence (XDG Standard)
 - Stored locally at `$XDG_DATA_HOME/mecanopro/progress.json` (or `~/.local/share/mecanopro/`).
 - Versioned schema with forward migration; a corrupt file is quarantined, never overwritten.
-- Track tier unlocks, personal bests, and weak keys over time.
+- Track tier unlocks, personal bests, and weak keys and words over time.
 - Per-session history — typing, drills and dictation in one stream — with older sessions rolled up into daily aggregates so the file stays bounded.
 
 ---
