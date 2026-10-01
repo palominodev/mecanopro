@@ -2606,6 +2606,7 @@ mod tests {
             key_stats: HashMap::new(),
             sessions: Vec::new(),
             buckets: Vec::new(),
+            word_stats: HashMap::new(),
             load_degraded: false,
         };
 

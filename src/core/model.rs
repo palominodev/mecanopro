@@ -2,6 +2,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::Duration;
 
+use super::words::WordObservation;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum Tier {
     Tier1Foundation,
@@ -178,6 +180,49 @@ impl KeyStat {
     }
 }
 
+/// Per-word counterpart of [`KeyStat`], keyed by the exact word text in
+/// `UserProgress::word_stats`. Counters are per *attempt*, i.e. per time the
+/// word was typed to completion, so a word typed 10 times with 3 wrong
+/// strokes in total has an error rate of 30%.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct WordStat {
+    /// Times the word was typed to completion.
+    pub attempts: usize,
+    /// Wrong strokes attributed to the word across all attempts.
+    pub errors: usize,
+    pub total_latency_ms: u64,
+}
+
+impl WordStat {
+    /// Records one completed attempt of the word.
+    pub fn record(&mut self, errors: usize, latency_ms: u64) {
+        self.attempts += 1;
+        self.errors += errors;
+        self.total_latency_ms = self.total_latency_ms.saturating_add(latency_ms);
+    }
+
+    /// Wrong strokes per attempt, as a percentage (same scale as
+    /// [`KeyStat::error_rate`]). May exceed 100 for a word with several
+    /// slips per attempt. `0.0` with no attempts.
+    pub fn error_rate(&self) -> f64 {
+        if self.attempts == 0 {
+            0.0
+        } else {
+            (self.errors as f64 / self.attempts as f64) * 100.0
+        }
+    }
+
+    /// Mean total time per attempt of the word, in milliseconds. `0.0` with
+    /// no attempts.
+    pub fn avg_latency_ms(&self) -> f64 {
+        if self.attempts == 0 {
+            0.0
+        } else {
+            self.total_latency_ms as f64 / self.attempts as f64
+        }
+    }
+}
+
 /// Current on-disk schema version written by this binary.
 pub const SCHEMA_VERSION: u32 = 2;
 
@@ -344,6 +389,11 @@ pub struct UserProgress {
     /// `storage::repository::apply_retention`.
     #[serde(default)]
     pub buckets: Vec<SessionBucket>,
+    /// Per-word stats keyed by exact word text. Additive and
+    /// `#[serde(default)]`, so a `progress.json` written before this field
+    /// existed still loads (no `SCHEMA_VERSION` bump).
+    #[serde(default)]
+    pub word_stats: HashMap<String, WordStat>,
     /// Set when `ProgressRepository::load()` recovered from a corrupt file
     /// but could not quarantine it (e.g. read-only directory). Never
     /// persisted: a load-status flag on a domain struct is a deliberate,
@@ -364,6 +414,7 @@ impl Default for UserProgress {
             key_stats: HashMap::new(),
             sessions: Vec::new(),
             buckets: Vec::new(),
+            word_stats: HashMap::new(),
             load_degraded: false,
         }
     }
@@ -378,6 +429,17 @@ impl UserProgress {
     pub fn migrate(&mut self) {
         if self.version < SCHEMA_VERSION {
             self.version = SCHEMA_VERSION;
+        }
+    }
+
+    /// Merges a finished session's word observations into `word_stats`: one
+    /// attempt per observation.
+    pub fn record_word_observations(&mut self, observations: &[WordObservation]) {
+        for obs in observations {
+            self.word_stats
+                .entry(obs.word.clone())
+                .or_default()
+                .record(obs.errors, obs.latency_ms);
         }
     }
 
@@ -480,6 +542,108 @@ mod tests {
         progress.migrate();
 
         assert_eq!(progress.version, SCHEMA_VERSION + 1);
+    }
+
+    #[test]
+    fn test_word_stat_rates_with_zero_attempts_are_zero_not_nan() {
+        let stat = WordStat::default();
+
+        assert_eq!(stat.error_rate(), 0.0);
+        assert_eq!(stat.avg_latency_ms(), 0.0);
+    }
+
+    #[test]
+    fn test_word_stat_rates_are_per_attempt() {
+        let stat = WordStat {
+            attempts: 10,
+            errors: 3,
+            total_latency_ms: 5_000,
+        };
+
+        assert!((stat.error_rate() - 30.0).abs() < f64::EPSILON);
+        assert!((stat.avg_latency_ms() - 500.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_word_stat_record_accumulates_one_attempt() {
+        let mut stat = WordStat::default();
+
+        stat.record(2, 300);
+        stat.record(0, 100);
+
+        assert_eq!(
+            stat,
+            WordStat {
+                attempts: 2,
+                errors: 2,
+                total_latency_ms: 400,
+            }
+        );
+    }
+
+    #[test]
+    fn test_record_word_observations_merges_into_word_stats() {
+        let mut progress = UserProgress::default();
+        let observations = vec![
+            WordObservation {
+                word: "casa".to_string(),
+                errors: 1,
+                latency_ms: 200,
+            },
+            WordObservation {
+                word: "casa".to_string(),
+                errors: 0,
+                latency_ms: 100,
+            },
+            WordObservation {
+                word: "luna".to_string(),
+                errors: 0,
+                latency_ms: 50,
+            },
+        ];
+
+        progress.record_word_observations(&observations);
+
+        assert_eq!(
+            progress.word_stats.get("casa"),
+            Some(&WordStat {
+                attempts: 2,
+                errors: 1,
+                total_latency_ms: 300,
+            })
+        );
+        assert_eq!(progress.word_stats.get("luna").map(|s| s.attempts), Some(1));
+    }
+
+    #[test]
+    fn test_word_stats_serde_round_trip() {
+        let mut progress = UserProgress::default();
+        progress.word_stats.insert(
+            "canción".to_string(),
+            WordStat {
+                attempts: 4,
+                errors: 3,
+                total_latency_ms: 1_234,
+            },
+        );
+
+        let json = serde_json::to_string(&progress).unwrap();
+        let restored: UserProgress = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(restored.word_stats, progress.word_stats);
+    }
+
+    #[test]
+    fn test_progress_json_without_word_stats_still_loads() {
+        let mut value = serde_json::to_value(UserProgress::default()).unwrap();
+        value.as_object_mut().unwrap().remove("word_stats");
+        let json = value.to_string();
+        assert!(!json.contains("word_stats"));
+
+        let restored: UserProgress = serde_json::from_str(&json).unwrap();
+
+        assert!(restored.word_stats.is_empty());
+        assert_eq!(restored.version, SCHEMA_VERSION);
     }
 
     #[test]

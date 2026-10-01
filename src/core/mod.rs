@@ -4,6 +4,7 @@ pub mod engine;
 pub mod feedback;
 pub mod metrics;
 pub mod model;
+pub mod words;
 
 pub use curriculum::Curriculum;
 pub use dictation::{DictationConfig, DictationEngine, DictationMetrics};
