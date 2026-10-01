@@ -90,5 +90,14 @@ Writer trigger fired (2+ non-trivial files per task: model.rs, repository.rs, cu
   - Visual check (pty+pyte, temp XDG dir, real progress.json untouched): seeded word_stats camión/mundo/playa/hola; drill title `Drill Adaptativo: Palabras Débiles`; text `camión playa mundo playa mundo camión mundo camión extraordinario salsa hada señal arquitectura avión perspectiva calle también persistencia aprendizaje soda` (failing words first and repeated, hola absent, real-word padding since <5 failing). New labels render at 120x40 without overflow.
   - Open (pre-existing, not ours): at 80x24 the stats footer is clipped ("Comand…"); old label had same length. Left for the user to decide.
 
+## Delivery (chained PRs)
+- Strategy: feature branch chain with draft tracker (chosen by the user). Slice budget exceptions (`size:exception`) requested for slices 1-3: cohesive units, ~60% tests.
+- Tracker branch `feat/adaptive-word-drill-tracker` (from master, one empty commit eae9b4c) -> draft PR to master, no merge.
+- Slice 1 `feat/adaptive-word-drill-01-word-stats`: 16f7d46 + c0698f4, 526 lines, base tracker.
+- Slice 2 `feat/adaptive-word-drill-02-persistence`: 2ab9d22 + 43531bf, 568 lines, base slice 1.
+- Slice 3 `feat/adaptive-word-drill-03-weak-word-drill`: 59279af + 306587f + c5e58cd, 665 lines, base slice 2.
+- Slice 4 `feat/adaptive-word-drill-04-ui-docs`: d993c0a + faa066e + dc353d3 + this delivery note, base slice 3.
+- Status: branches and PR bodies prepared locally; NOT pushed and no PR created (user chose "local only for now" when asked to authorize push to origin).
+
 ## Next step
-Assess T4 review tier (base c5e58cd); close.
+Publish the chain when the user authorizes push to origin + gh PR creation (tracker draft first, then children in order); fill PR numbers into the bodies.
