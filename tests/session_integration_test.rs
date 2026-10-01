@@ -58,6 +58,7 @@ fn test_end_to_end_spanish_typing_session() {
             &summary,
             metrics.elapsed.as_secs(),
             &engine.keystrokes,
+            &[],
         )
         .expect("Recording session must succeed");
 

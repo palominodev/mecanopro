@@ -4,6 +4,7 @@ use crate::core::dictation::{DictationConfig, DictationEngine, DictationMetrics}
 use crate::core::engine::TypingEngine;
 use crate::core::metrics::MetricsCalculator;
 use crate::core::model::{Lesson, SessionKind, SessionMetrics, SessionSummary, Tier, UserProgress};
+use crate::core::words::{observations_from_dictation_strokes, observations_from_text_strokes};
 use crate::storage::ProgressRepository;
 use crate::tui::animation::{ShipAnimation, ShipPhase};
 use crate::tui::planet_layout::{MenuRow, build_rows};
@@ -270,11 +271,13 @@ impl App {
                 }
             };
 
+            let word_observations = observations_from_text_strokes(&engine.keystrokes);
             if let Ok(updated_progress) = self.repository.record_session_result(
                 kind,
                 &summary,
                 metrics.elapsed.as_secs(),
                 &engine.keystrokes,
+                &word_observations,
             ) {
                 self.user_progress = updated_progress;
             }
@@ -602,11 +605,14 @@ impl App {
                 let (summary, kind) = metrics.to_session_parts();
                 let duration_secs = metrics.active_typing_duration.as_secs();
 
+                let word_observations =
+                    observations_from_dictation_strokes(&engine.words, &engine.keystrokes);
                 if let Ok(updated_progress) = self.repository.record_session_result(
                     kind,
                     &summary,
                     duration_secs,
                     &engine.keystrokes,
+                    &word_observations,
                 ) {
                     self.user_progress = updated_progress;
                 }
@@ -1508,6 +1514,82 @@ mod tests {
         assert_eq!(
             app.user_progress.total_practice_seconds, starting_practice_seconds,
             "dictation must not accrue typing wall-clock practice time (design D0)"
+        );
+    }
+
+    /// Finishing a typing session derives word observations from the real
+    /// engine's keystrokes and persists them: a word typed wrongly first
+    /// shows `errors > 0` in `word_stats`, surviving a reload from disk.
+    #[test]
+    fn test_finish_current_session_records_word_stats_with_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = ProgressRepository::with_path(dir.path().join("progress.json"));
+        let mut app = App::with_repository(repo);
+        app.user_progress = UserProgress::default();
+
+        let mut lesson = Curriculum::find_lesson("t1-l1").expect("fixture needs t1-l1");
+        lesson.text = "casa luna".to_string();
+        app.start_practice(lesson);
+        for ch in "caxsa luna".chars() {
+            app.handle_key_input(ch);
+        }
+
+        assert_eq!(app.current_view, CurrentView::Summary);
+        let casa = &app.user_progress.word_stats["casa"];
+        assert_eq!((casa.attempts, casa.errors), (1, 1));
+        let luna = &app.user_progress.word_stats["luna"];
+        assert_eq!((luna.attempts, luna.errors), (1, 0));
+
+        let reloaded = app.repository.load();
+        assert_eq!(reloaded.word_stats, app.user_progress.word_stats);
+    }
+
+    /// An adaptive drill finishes through the same path, so it feeds
+    /// `word_stats` too.
+    #[test]
+    fn test_finish_adaptive_drill_session_records_word_stats() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = ProgressRepository::with_path(dir.path().join("progress.json"));
+        let mut app = App::with_repository(repo);
+        app.user_progress = UserProgress::default();
+
+        app.start_adaptive_drill();
+        let text = app.current_engine.as_ref().unwrap().lesson.text.clone();
+        for ch in text.chars() {
+            app.handle_key_input(ch);
+        }
+
+        assert!(
+            !app.user_progress.word_stats.is_empty(),
+            "a finished adaptive drill must record word stats"
+        );
+    }
+
+    /// A completed dictation session records one attempt per dictated word,
+    /// with the mistyped word carrying the error.
+    #[test]
+    fn test_dictation_completion_records_word_stats_with_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = ProgressRepository::with_path(dir.path().join("progress.json"));
+        let mut app = App::with_repository(repo);
+        app.user_progress = UserProgress::default();
+
+        app.current_dictation = Some(crate::core::dictation::DictationEngine::new(
+            vec!["casa".to_string(), "sala".to_string()],
+            crate::core::dictation::DictationConfig::default(),
+        ));
+        for ch in "caxsasala".chars() {
+            app.handle_dictation_key_input(ch);
+        }
+
+        assert_eq!(app.current_view, CurrentView::DictationSummary);
+        let casa = &app.user_progress.word_stats["casa"];
+        assert_eq!((casa.attempts, casa.errors), (1, 1));
+        let sala = &app.user_progress.word_stats["sala"];
+        assert_eq!((sala.attempts, sala.errors), (1, 0));
+        assert_eq!(
+            app.repository.load().word_stats,
+            app.user_progress.word_stats
         );
     }
 

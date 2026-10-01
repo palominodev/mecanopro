@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
-use super::words::WordObservation;
+use super::words::{WordObservation, normalize_word_key};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum Tier {
@@ -180,7 +180,7 @@ impl KeyStat {
     }
 }
 
-/// Per-word counterpart of [`KeyStat`], keyed by the exact word text in
+/// Per-word counterpart of [`KeyStat`], keyed by the normalized word in
 /// `UserProgress::word_stats`. Counters are per *attempt*, i.e. per time the
 /// word was typed to completion, so a word typed 10 times with 3 wrong
 /// strokes in total has an error rate of 30%.
@@ -316,6 +316,12 @@ pub struct SessionRecord {
 /// `storage::repository::apply_retention`.
 pub const MAX_DETAILED_SESSIONS: usize = 50;
 
+/// Cap on `UserProgress::word_stats` entries. Past it, the weakest-signal
+/// words are evicted deterministically (see
+/// `UserProgress::record_word_observations`), so the progress file cannot
+/// grow without bound.
+pub const MAX_WORD_STATS: usize = 500;
+
 /// Seconds in a day. Never inlined at call sites — always reached through
 /// [`day_index`] (design D6).
 pub const SECONDS_PER_DAY: u64 = 86_400;
@@ -389,7 +395,8 @@ pub struct UserProgress {
     /// `storage::repository::apply_retention`.
     #[serde(default)]
     pub buckets: Vec<SessionBucket>,
-    /// Per-word stats keyed by exact word text. Additive and
+    /// Per-word stats keyed by the normalized word (see
+    /// `words::normalize_word_key`), capped at `MAX_WORD_STATS`. Additive and
     /// `#[serde(default)]`, so a `progress.json` written before this field
     /// existed still loads (no `SCHEMA_VERSION` bump).
     #[serde(default)]
@@ -433,13 +440,49 @@ impl UserProgress {
     }
 
     /// Merges a finished session's word observations into `word_stats`: one
-    /// attempt per observation.
+    /// attempt per observation, keyed by [`normalize_word_key`] (observations
+    /// whose key normalizes to nothing are skipped). Afterwards the map is
+    /// trimmed back to [`MAX_WORD_STATS`] by [`Self::evict_excess_word_stats`],
+    /// never dropping a word merged in this call.
     pub fn record_word_observations(&mut self, observations: &[WordObservation]) {
+        let mut merged: HashSet<String> = HashSet::new();
         for obs in observations {
+            let Some(key) = normalize_word_key(&obs.word) else {
+                continue;
+            };
             self.word_stats
-                .entry(obs.word.clone())
+                .entry(key.clone())
                 .or_default()
                 .record(obs.errors, obs.latency_ms);
+            merged.insert(key);
+        }
+        self.evict_excess_word_stats(&merged);
+    }
+
+    /// Deterministic eviction down to `MAX_WORD_STATS`: weakest signal first,
+    /// i.e. fewest attempts, then fewest errors, then lexicographic word
+    /// (never `HashMap` iteration order). Words in `protected` are never
+    /// evicted, so the cap is only exceeded if one call alone merges more
+    /// than `MAX_WORD_STATS` distinct words.
+    fn evict_excess_word_stats(&mut self, protected: &HashSet<String>) {
+        let excess = self.word_stats.len().saturating_sub(MAX_WORD_STATS);
+        if excess == 0 {
+            return;
+        }
+        let mut candidates: Vec<(usize, usize, &String)> = self
+            .word_stats
+            .iter()
+            .filter(|(word, _)| !protected.contains(*word))
+            .map(|(word, stat)| (stat.attempts, stat.errors, word))
+            .collect();
+        candidates.sort_unstable();
+        let doomed: Vec<String> = candidates
+            .into_iter()
+            .take(excess)
+            .map(|(_, _, word)| word.clone())
+            .collect();
+        for word in doomed {
+            self.word_stats.remove(&word);
         }
     }
 
@@ -613,6 +656,170 @@ mod tests {
             })
         );
         assert_eq!(progress.word_stats.get("luna").map(|s| s.attempts), Some(1));
+    }
+
+    fn word_obs(word: &str, errors: usize) -> WordObservation {
+        WordObservation {
+            word: word.to_string(),
+            errors,
+            latency_ms: 10,
+        }
+    }
+
+    #[test]
+    fn test_record_word_observations_merges_case_and_edge_punctuation() {
+        let mut progress = UserProgress::default();
+
+        progress.record_word_observations(&[
+            word_obs("Hola,", 1),
+            word_obs("hola", 0),
+            word_obs("HOLA.", 2),
+        ]);
+
+        assert_eq!(progress.word_stats.len(), 1);
+        let stat = &progress.word_stats["hola"];
+        assert_eq!((stat.attempts, stat.errors), (3, 3));
+    }
+
+    #[test]
+    fn test_record_word_observations_keeps_accents_and_enye() {
+        let mut progress = UserProgress::default();
+
+        progress.record_word_observations(&[
+            word_obs("Niño", 1),
+            word_obs("¿Canción?", 0),
+            word_obs("pingüino", 0),
+        ]);
+
+        assert!(progress.word_stats.contains_key("niño"));
+        assert!(progress.word_stats.contains_key("canción"));
+        assert!(progress.word_stats.contains_key("pingüino"));
+        assert_eq!(progress.word_stats.len(), 3);
+    }
+
+    #[test]
+    fn test_record_word_observations_skips_empty_and_non_alphabetic_keys() {
+        let mut progress = UserProgress::default();
+
+        progress.record_word_observations(&[
+            word_obs("", 1),
+            word_obs("...", 1),
+            word_obs("123", 1),
+            word_obs("--", 0),
+        ]);
+
+        assert!(progress.word_stats.is_empty());
+    }
+
+    #[test]
+    fn test_record_word_observations_enforces_cap_deterministically() {
+        // Two maps with identical content but different insertion order (and
+        // distinct `RandomState`s), all tied on attempts/errors: only the
+        // lexicographic tie-break can make the surviving set identical.
+        let words: Vec<String> = (0..MAX_WORD_STATS + 40)
+            .map(|i| format!("w{i:04}x"))
+            .collect();
+        let build = |order: Vec<&String>| {
+            let mut progress = UserProgress::default();
+            for word in order {
+                let mut stat = WordStat::default();
+                stat.record(0, 10);
+                progress.word_stats.insert(word.clone(), stat);
+            }
+            progress
+        };
+        let mut a = build(words.iter().collect());
+        let mut b = build(words.iter().rev().collect());
+
+        a.record_word_observations(&[word_obs("fresh", 0)]);
+        b.record_word_observations(&[word_obs("fresh", 0)]);
+
+        let mut keys_a: Vec<_> = a.word_stats.keys().cloned().collect();
+        let mut keys_b: Vec<_> = b.word_stats.keys().cloned().collect();
+        keys_a.sort();
+        keys_b.sort();
+        assert_eq!(keys_a.len(), MAX_WORD_STATS);
+        assert_eq!(keys_a, keys_b);
+        // Lexicographically smallest tied words go first; the largest stay.
+        assert!(!a.word_stats.contains_key("w0000x"));
+        assert!(a.word_stats.contains_key(words.last().unwrap()));
+        assert!(a.word_stats.contains_key("fresh"));
+    }
+
+    #[test]
+    fn test_word_stats_cap_never_evicts_words_from_the_current_call() {
+        let mut progress = UserProgress::default();
+        let filler: Vec<WordObservation> = (0..MAX_WORD_STATS)
+            .map(|i| {
+                // Heavier history than a one-off word: attempts >= 2.
+                word_obs(&format!("old{i:04}x"), 1)
+            })
+            .collect();
+        progress.record_word_observations(&filler);
+        progress.record_word_observations(&filler);
+        assert_eq!(progress.word_stats.len(), MAX_WORD_STATS);
+
+        // A brand-new clean one-off word has the weakest signal of all, yet
+        // it was just merged, so it must survive.
+        progress.record_word_observations(&[word_obs("zzfresh", 0)]);
+
+        assert!(progress.word_stats.contains_key("zzfresh"));
+        assert_eq!(progress.word_stats.len(), MAX_WORD_STATS);
+    }
+
+    #[test]
+    fn test_word_stats_cap_prefers_evicting_one_off_clean_words_over_high_error_words() {
+        let mut progress = UserProgress::default();
+        // One-off clean words first, then one high-error single-attempt word
+        // that sorts lexicographically *before* every clean word.
+        let mut batch: Vec<WordObservation> = (0..MAX_WORD_STATS - 1)
+            .map(|i| word_obs(&format!("m{i:04}x"), 0))
+            .collect();
+        batch.push(word_obs("aaerror", 5));
+        progress.record_word_observations(&batch);
+        assert_eq!(progress.word_stats.len(), MAX_WORD_STATS);
+
+        progress.record_word_observations(&[word_obs("newcomer", 0)]);
+
+        assert_eq!(progress.word_stats.len(), MAX_WORD_STATS);
+        assert!(progress.word_stats.contains_key("newcomer"));
+        assert_eq!(
+            progress.word_stats.get("aaerror").map(|s| s.errors),
+            Some(5),
+            "the high-error word must outlive a one-off clean word"
+        );
+    }
+
+    #[test]
+    fn test_word_stats_cap_evicts_fewest_attempts_first_then_lexicographic() {
+        let mut progress = UserProgress::default();
+        let practiced: Vec<WordObservation> = (0..MAX_WORD_STATS - 2)
+            .map(|i| word_obs(&format!("practiced{i:04}x"), 0))
+            .collect();
+        for _ in 0..3 {
+            progress.record_word_observations(&practiced);
+        }
+        progress.record_word_observations(&[word_obs("bbb", 0), word_obs("aaa", 0)]);
+        assert_eq!(progress.word_stats.len(), MAX_WORD_STATS);
+
+        // Two newcomers overflow the cap by two: both one-off words are the
+        // weakest signal and tie on attempts/errors, so lexicographic order
+        // decides, and the practiced words are untouched.
+        progress.record_word_observations(&[word_obs("new1", 0), word_obs("new2", 0)]);
+
+        assert!(!progress.word_stats.contains_key("aaa"));
+        assert!(!progress.word_stats.contains_key("bbb"));
+        assert!(progress.word_stats.contains_key("new1"));
+        assert!(progress.word_stats.contains_key("new2"));
+        assert_eq!(progress.word_stats.len(), MAX_WORD_STATS);
+        assert!(
+            progress
+                .word_stats
+                .keys()
+                .filter(|k| k.starts_with("practiced"))
+                .count()
+                == MAX_WORD_STATS - 2
+        );
     }
 
     #[test]

@@ -2,6 +2,7 @@ use crate::core::model::{
     BestScore, KeyStroke, MAX_DETAILED_SESSIONS, SCHEMA_VERSION, SessionBucket, SessionKind,
     SessionRecord, SessionSummary, Tier, UserProgress, day_index, schema_v1,
 };
+use crate::core::words::WordObservation;
 use serde::Deserialize;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -155,6 +156,7 @@ impl ProgressRepository {
         summary: &SessionSummary,
         duration_secs: u64,
         keystrokes: &[KeyStroke],
+        word_observations: &[WordObservation],
     ) -> std::io::Result<UserProgress> {
         let mut progress = self.load();
 
@@ -221,6 +223,9 @@ impl ProgressRepository {
             }
             stat.total_latency_ms += stroke.latency.as_millis() as u64;
         }
+
+        // Word keys are normalized and the map is capped inside the core.
+        progress.record_word_observations(word_observations);
 
         // total_practice_seconds is typing wall-clock only (design D0):
         // Lesson/Drill accrue, Dictation does not. Exhaustive on purpose —
@@ -603,7 +608,7 @@ mod tests {
         // Drive the full record_session_result path (load -> mutate -> save),
         // not save() directly: this is the entry point actually used at
         // app.rs's session-completion call sites.
-        let result = repo.record_session_result(kind, &summary, 5, &[]);
+        let result = repo.record_session_result(kind, &summary, 5, &[], &[]);
         restore_writable();
 
         assert!(result.is_err());
@@ -690,7 +695,9 @@ mod tests {
             passed: true,
         };
 
-        let updated = repo.record_session_result(kind, &summary, 38, &[]).unwrap();
+        let updated = repo
+            .record_session_result(kind, &summary, 38, &[], &[])
+            .unwrap();
 
         assert_eq!(updated.completed_lessons.len(), 1);
         assert_eq!(updated.unlocked_tier, Tier::Tier2FullAlphabet);
@@ -723,7 +730,9 @@ mod tests {
             passed: true,
         };
 
-        let updated = repo.record_session_result(kind, &summary, 38, &[]).unwrap();
+        let updated = repo
+            .record_session_result(kind, &summary, 38, &[], &[])
+            .unwrap();
 
         assert_eq!(updated.sessions.len(), 1);
         assert_eq!(updated.sessions[0].duration_secs, 38);
@@ -785,7 +794,7 @@ mod tests {
         ];
 
         let updated = repo
-            .record_session_result(SessionKind::Drill, &summary, 25, &keystrokes)
+            .record_session_result(SessionKind::Drill, &summary, 25, &keystrokes, &[])
             .unwrap();
 
         assert_eq!(
@@ -826,7 +835,7 @@ mod tests {
         let mut updated = None;
         for _ in 0..below_cap {
             updated = Some(
-                repo.record_session_result(SessionKind::Drill, &summary, 5, &[])
+                repo.record_session_result(SessionKind::Drill, &summary, 5, &[], &[])
                     .unwrap(),
             );
         }
@@ -959,5 +968,107 @@ mod tests {
         assert_eq!(forward, grouped);
         assert_eq!(forward.len(), 1);
         assert_eq!(forward[0].sessions, 5);
+    }
+
+    fn drill_summary() -> SessionSummary {
+        SessionSummary {
+            cpm: 100.0,
+            raw_wpm: 20.0,
+            net_wpm: 20.0,
+            accuracy: 90.0,
+            consistency: 90.0,
+            total_keystrokes: 8,
+            correct_keystrokes: 7,
+            error_count: 1,
+        }
+    }
+
+    fn word_obs(word: &str, errors: usize, latency_ms: u64) -> WordObservation {
+        WordObservation {
+            word: word.to_string(),
+            errors,
+            latency_ms,
+        }
+    }
+
+    #[test]
+    fn test_record_session_result_persists_word_stats_with_errors_across_save_load() {
+        let dir = tempdir().unwrap();
+        let repo = ProgressRepository::with_path(dir.path().join("progress.json"));
+        let observations = [word_obs("Casa,", 2, 800), word_obs("luna", 0, 400)];
+
+        let updated = repo
+            .record_session_result(SessionKind::Drill, &drill_summary(), 5, &[], &observations)
+            .unwrap();
+
+        let casa = &updated.word_stats["casa"];
+        assert_eq!(
+            (casa.attempts, casa.errors, casa.total_latency_ms),
+            (1, 2, 800)
+        );
+
+        let reloaded = repo.load();
+        assert_eq!(reloaded.word_stats, updated.word_stats);
+        assert!(reloaded.word_stats["casa"].errors > 0);
+        assert_eq!(reloaded.word_stats["luna"].errors, 0);
+    }
+
+    #[test]
+    fn test_record_session_result_accumulates_word_stats_over_sessions() {
+        let dir = tempdir().unwrap();
+        let repo = ProgressRepository::with_path(dir.path().join("progress.json"));
+
+        repo.record_session_result(
+            SessionKind::Drill,
+            &drill_summary(),
+            5,
+            &[],
+            &[word_obs("casa", 1, 100)],
+        )
+        .unwrap();
+        let updated = repo
+            .record_session_result(
+                SessionKind::Drill,
+                &drill_summary(),
+                5,
+                &[],
+                &[word_obs("casa", 0, 50)],
+            )
+            .unwrap();
+
+        let casa = &updated.word_stats["casa"];
+        assert_eq!(
+            (casa.attempts, casa.errors, casa.total_latency_ms),
+            (2, 1, 150)
+        );
+    }
+
+    #[test]
+    fn test_legacy_progress_without_word_stats_loads_and_gains_word_stats_on_record() {
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("progress.json");
+        fs::write(
+            &file_path,
+            r#"{"completed_lessons": {}, "unlocked_tier": "Tier1Foundation", "total_practice_seconds": 7, "key_stats": {}}"#,
+        )
+        .unwrap();
+        let repo = ProgressRepository::with_path(&file_path);
+
+        let loaded = repo.load();
+        assert!(loaded.word_stats.is_empty());
+        assert_eq!(loaded.total_practice_seconds, 7);
+
+        let updated = repo
+            .record_session_result(
+                SessionKind::Drill,
+                &drill_summary(),
+                5,
+                &[],
+                &[word_obs("sol", 1, 10)],
+            )
+            .unwrap();
+
+        assert_eq!(updated.total_practice_seconds, 12);
+        assert_eq!(repo.load().word_stats["sol"].errors, 1);
     }
 }

@@ -32,6 +32,20 @@ fn latency_millis(stroke: &KeyStroke) -> u64 {
     u64::try_from(stroke.latency.as_millis()).unwrap_or(u64::MAX)
 }
 
+/// Canonical key under which a word is tracked in
+/// `UserProgress::word_stats`: lowercased, with leading and trailing
+/// non-alphanumeric characters trimmed (`"Hola,"` and `"hola"` merge), while
+/// inner characters such as `ñ`, accents, apostrophes and hyphens are kept.
+/// Returns `None` for a token with no alphabetic character (empty, `...`,
+/// `123`), which is not worth tracking.
+pub fn normalize_word_key(word: &str) -> Option<String> {
+    let trimmed = word.trim_matches(|c: char| !c.is_alphanumeric());
+    if !is_trackable(trimmed) {
+        return None;
+    }
+    Some(trimmed.to_lowercase())
+}
+
 /// Strokes accumulated for the word currently being typed.
 #[derive(Default)]
 struct WordInProgress {
@@ -287,5 +301,123 @@ mod tests {
         let words = vec!["casa".to_string()];
         assert!(observations_from_dictation_strokes(&words, &[]).is_empty());
         assert!(observations_from_dictation_strokes::<String>(&[], &correct("casa", 1)).is_empty());
+    }
+
+    // --- normalize_word_key ---
+
+    #[test]
+    fn test_normalize_lowercases_and_trims_edge_punctuation() {
+        assert_eq!(normalize_word_key("Hola,"), Some("hola".to_string()));
+        assert_eq!(normalize_word_key("¿Cómo?"), Some("cómo".to_string()));
+        assert_eq!(normalize_word_key("\"casa\"."), Some("casa".to_string()));
+    }
+
+    #[test]
+    fn test_normalize_keeps_unicode_letters_and_inner_punctuation() {
+        assert_eq!(normalize_word_key("NIÑO"), Some("niño".to_string()));
+        assert_eq!(normalize_word_key("pingüino"), Some("pingüino".to_string()));
+        assert_eq!(normalize_word_key("canción!"), Some("canción".to_string()));
+        assert_eq!(normalize_word_key("o'clock"), Some("o'clock".to_string()));
+        assert_eq!(
+            normalize_word_key("anti-hielo"),
+            Some("anti-hielo".to_string())
+        );
+    }
+
+    #[test]
+    fn test_normalize_rejects_empty_and_non_alphabetic_tokens() {
+        assert_eq!(normalize_word_key(""), None);
+        assert_eq!(normalize_word_key("..."), None);
+        assert_eq!(normalize_word_key("123"), None);
+        assert_eq!(normalize_word_key("(42)"), None);
+    }
+
+    #[test]
+    fn test_normalize_keeps_alphanumeric_words_with_digits() {
+        assert_eq!(normalize_word_key("Mp3,"), Some("mp3".to_string()));
+    }
+
+    // --- pinning the real engines' retry behaviour (R3-001) ---
+
+    fn lesson_with(text: &str) -> crate::core::model::Lesson {
+        crate::core::model::Lesson {
+            id: "retry-pin".into(),
+            title: "Retry pin".into(),
+            tier: crate::core::model::Tier::Tier1Foundation,
+            section_id: "s".into(),
+            description: "d".into(),
+            text: text.into(),
+            target_cpm: 50.0,
+            min_accuracy: 96.0,
+        }
+    }
+
+    fn drive_typing(text: &str, typed: &str) -> Vec<KeyStroke> {
+        let mut engine = crate::core::engine::TypingEngine::new(lesson_with(text));
+        let start = std::time::Instant::now();
+        for (i, ch) in typed.chars().enumerate() {
+            engine.handle_char(ch, start + Duration::from_millis(10 * (i as u64 + 1)));
+        }
+        assert!(engine.is_finished(), "script must complete the lesson");
+        engine.keystrokes
+    }
+
+    #[test]
+    fn test_real_typing_engine_wrong_stroke_mid_word_is_that_words_error() {
+        // 'x' replaces 's' in "casa"; the engine does not advance, so the
+        // next stroke retries 's'.
+        let strokes = drive_typing("casa luna", "caxsa luna");
+
+        let observed = observations_from_text_strokes(&strokes);
+
+        let words: Vec<&str> = observed.iter().map(|o| o.word.as_str()).collect();
+        assert_eq!(words, vec!["casa", "luna"]);
+        assert_eq!(observed[0].errors, 1);
+        assert_eq!(observed[1].errors, 0);
+    }
+
+    #[test]
+    fn test_real_typing_engine_wrong_stroke_at_space_is_the_finishing_words_error() {
+        // 'x' typed where the space is expected, then the space itself.
+        let strokes = drive_typing("casa luna", "casax luna");
+
+        let observed = observations_from_text_strokes(&strokes);
+
+        let words: Vec<&str> = observed.iter().map(|o| o.word.as_str()).collect();
+        assert_eq!(words, vec!["casa", "luna"]);
+        assert_eq!(observed[0].errors, 1);
+        assert_eq!(observed[1].errors, 0);
+    }
+
+    #[test]
+    fn test_real_typing_engine_repeated_wrong_strokes_never_split_or_duplicate_words() {
+        let strokes = drive_typing("casa luna", "cxxasa lxuna");
+
+        let observed = observations_from_text_strokes(&strokes);
+
+        let summary: Vec<(&str, usize)> = observed
+            .iter()
+            .map(|o| (o.word.as_str(), o.errors))
+            .collect();
+        assert_eq!(summary, vec![("casa", 2), ("luna", 1)]);
+    }
+
+    #[test]
+    fn test_real_dictation_engine_wrong_stroke_is_attributed_to_the_right_word() {
+        use crate::core::dictation::{DictationConfig, DictationEngine};
+        let words = vec!["casa".to_string(), "sal".to_string()];
+        let mut engine = DictationEngine::new(words.clone(), DictationConfig::default());
+        let start = std::time::Instant::now();
+        for (i, ch) in "caxsasal".chars().enumerate() {
+            engine.handle_char(ch, start + Duration::from_millis(10 * (i as u64 + 1)));
+        }
+
+        let observed = observations_from_dictation_strokes(&engine.words, &engine.keystrokes);
+
+        let summary: Vec<(&str, usize)> = observed
+            .iter()
+            .map(|o| (o.word.as_str(), o.errors))
+            .collect();
+        assert_eq!(summary, vec![("casa", 1), ("sal", 0)]);
     }
 }
