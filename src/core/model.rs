@@ -459,27 +459,47 @@ impl UserProgress {
         self.evict_excess_word_stats(&merged);
     }
 
-    /// Deterministic eviction down to `MAX_WORD_STATS`: weakest signal first,
-    /// i.e. fewest attempts, then fewest errors, then lexicographic word
-    /// (never `HashMap` iteration order). Words in `protected` are never
-    /// evicted, so the cap is only exceeded if one call alone merges more
-    /// than `MAX_WORD_STATS` distinct words.
+    /// Deterministic eviction down to `MAX_WORD_STATS`, never by `HashMap`
+    /// iteration order. Error-bearing words carry the signal the adaptive
+    /// drill ranks on, so they go last:
+    ///
+    /// 1. clean words (`errors == 0`) first: fewest attempts, then
+    ///    lexicographic word;
+    /// 2. only if no clean words remain, error-bearing words: lowest error
+    ///    rate, then fewest errors, then lexicographic word.
+    ///
+    /// Words in `protected` are never evicted, so the cap is only exceeded if
+    /// one call alone merges more than `MAX_WORD_STATS` distinct words.
     fn evict_excess_word_stats(&mut self, protected: &HashSet<String>) {
         let excess = self.word_stats.len().saturating_sub(MAX_WORD_STATS);
         if excess == 0 {
             return;
         }
-        let mut candidates: Vec<(usize, usize, &String)> = self
+        let mut candidates: Vec<(&String, &WordStat)> = self
             .word_stats
             .iter()
             .filter(|(word, _)| !protected.contains(*word))
-            .map(|(word, stat)| (stat.attempts, stat.errors, word))
             .collect();
-        candidates.sort_unstable();
+        candidates.sort_unstable_by(|(word_a, a), (word_b, b)| {
+            let (a_clean, b_clean) = (a.errors == 0, b.errors == 0);
+            // `true` (clean) sorts before `false`, i.e. is evicted first.
+            b_clean
+                .cmp(&a_clean)
+                .then_with(|| {
+                    if a_clean {
+                        a.attempts.cmp(&b.attempts)
+                    } else {
+                        a.error_rate()
+                            .total_cmp(&b.error_rate())
+                            .then(a.errors.cmp(&b.errors))
+                    }
+                })
+                .then_with(|| word_a.cmp(word_b))
+        });
         let doomed: Vec<String> = candidates
             .into_iter()
             .take(excess)
-            .map(|(_, _, word)| word.clone())
+            .map(|(word, _)| word.clone())
             .collect();
         for word in doomed {
             self.word_stats.remove(&word);
@@ -787,6 +807,62 @@ mod tests {
             progress.word_stats.get("aaerror").map(|s| s.errors),
             Some(5),
             "the high-error word must outlive a one-off clean word"
+        );
+    }
+
+    #[test]
+    fn test_word_stats_cap_keeps_one_attempt_high_error_word_over_frequent_clean_word() {
+        let mut progress = UserProgress::default();
+        // Frequent clean words: 5 attempts each, no errors.
+        let clean: Vec<WordObservation> = (0..MAX_WORD_STATS - 1)
+            .map(|i| word_obs(&format!("clean{i:04}x"), 0))
+            .collect();
+        for _ in 0..5 {
+            progress.record_word_observations(&clean);
+        }
+        // A single-attempt word with many errors: fewest attempts overall, so
+        // the old "fewest attempts first" rule would evict it.
+        progress.record_word_observations(&[word_obs("aaerror", 5)]);
+        assert_eq!(progress.word_stats.len(), MAX_WORD_STATS);
+
+        progress.record_word_observations(&[word_obs("newcomer", 0)]);
+
+        assert_eq!(progress.word_stats.len(), MAX_WORD_STATS);
+        assert!(progress.word_stats.contains_key("newcomer"));
+        assert_eq!(
+            progress
+                .word_stats
+                .get("aaerror")
+                .map(|s| (s.attempts, s.errors)),
+            Some((1, 5)),
+            "an error-bearing word must outlive a clean word, whatever the attempts"
+        );
+    }
+
+    #[test]
+    fn test_word_stats_cap_evicts_lowest_error_rate_first_when_no_clean_words_remain() {
+        let mut progress = UserProgress::default();
+        // Every word bears errors. `zlow` has the lowest error rate (1 error
+        // over 4 attempts = 25%) but the most attempts; the rest sit at 100%+.
+        let mut batch: Vec<WordObservation> = (0..MAX_WORD_STATS - 1)
+            .map(|i| word_obs(&format!("err{i:04}x"), 1))
+            .collect();
+        batch.push(word_obs("zlow", 1));
+        progress.record_word_observations(&batch);
+        let mut only_low: Vec<WordObservation> = vec![word_obs("zlow", 0)];
+        only_low.push(word_obs("zlow", 0));
+        only_low.push(word_obs("zlow", 0));
+        progress.record_word_observations(&only_low);
+        assert_eq!(progress.word_stats["zlow"].attempts, 4);
+        assert_eq!(progress.word_stats.len(), MAX_WORD_STATS);
+
+        progress.record_word_observations(&[word_obs("newcomer", 2)]);
+
+        assert_eq!(progress.word_stats.len(), MAX_WORD_STATS);
+        assert!(progress.word_stats.contains_key("newcomer"));
+        assert!(
+            !progress.word_stats.contains_key("zlow"),
+            "the lowest error-rate word goes first among error-bearing words"
         );
     }
 
