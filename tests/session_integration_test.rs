@@ -73,21 +73,19 @@ fn test_end_to_end_spanish_typing_session() {
     assert_eq!(updated_progress.unlocked_tier, Tier::Tier2FullAlphabet);
 }
 
-/// Task 4.7: a pre-change (legacy, versionless) `progress.json` must load
-/// with zero data loss through `App::with_repository` — the real
-/// production seam used by both completion call sites — and stay
-/// zero-loss after completing one typing lesson AND one dictation session
-/// through their actual `App` entry points (`handle_key_input`,
-/// `handle_dictation_key_input`), not by constructing `SessionKind`/
-/// `SessionSummary` by hand as the test above does. This is the first
-/// integration coverage combining both session kinds end to end through
-/// `App`, confirming: legacy fields survive untouched, `key_stats` grows
-/// for both kinds, `total_practice_seconds` accrues only for the lesson
-/// (design D0 — dictation must not add to it), both kinds appear in
+/// A pre-change (legacy, versionless) `progress.json` must load with zero
+/// data loss through `App::with_repository` — the real production seam used
+/// by the typing completion call site — and stay zero-loss after completing
+/// one typing lesson AND one adaptive weak-words drill through their actual
+/// `App` entry points (`start_practice`/`start_adaptive_drill` +
+/// `handle_key_input`), not by constructing `SessionKind`/`SessionSummary` by
+/// hand as the test above does. Confirms: legacy fields survive untouched,
+/// `key_stats` keeps growing, `total_practice_seconds` never resets, the
+/// drill writes no `completed_lessons` entry, both kinds appear in
 /// `sessions_recent_first()` ordered by completion, and the final state
 /// round-trips through a fresh on-disk read, not just in memory.
 #[test]
-fn test_legacy_progress_survives_lesson_and_dictation_completion_via_app() {
+fn test_legacy_progress_survives_lesson_and_adaptive_drill_completion_via_app() {
     let dir = tempdir().unwrap();
     let repo_path = dir.path().join("progress.json");
     fs::write(
@@ -131,30 +129,38 @@ fn test_legacy_progress_survives_lesson_and_dictation_completion_via_app() {
     );
     assert_eq!(app.user_progress.sessions.len(), 1);
 
-    // Complete a dictation session through its real call site.
-    app.start_dictation(Some(Tier::Tier1Foundation), Some(2));
-    let words = app.current_dictation.as_ref().unwrap().words.clone();
-    for word in &words {
-        for ch in word.chars() {
-            app.handle_dictation_key_input(ch);
-        }
+    // Complete an adaptive weak-words drill through its real call site.
+    app.start_adaptive_drill();
+    let drill_text = app
+        .current_engine
+        .as_ref()
+        .expect("start_adaptive_drill must start a practice session")
+        .lesson
+        .text
+        .clone();
+    for ch in drill_text.chars() {
+        app.handle_key_input(ch);
     }
 
-    // Dictation must not touch total_practice_seconds (design D0).
-    assert_eq!(
-        app.user_progress.total_practice_seconds,
-        practice_seconds_after_lesson
+    // A drill is never a curriculum lesson: no new completed_lessons entry.
+    assert_eq!(app.user_progress.completed_lessons.len(), 2);
+    assert!(
+        !app.user_progress
+            .completed_lessons
+            .contains_key(Curriculum::ADAPTIVE_DRILL_ID)
     );
-    // But it must still feed key_stats: 'a' pre-existed at 3 attempts and
-    // both t1-l2's text and the Tier1 dictation pool contain 'a'/'d'/'k'
-    // characters, so attempts must have grown past the legacy baseline.
+    // Practice time only ever grows on top of the lesson's total.
+    let practice_seconds_after_drill = app.user_progress.total_practice_seconds;
+    assert!(practice_seconds_after_drill >= practice_seconds_after_lesson);
+    // 'a' pre-existed at 3 attempts and both t1-l2's text and the drill
+    // pool contain 'a', so attempts must have grown past the legacy baseline.
     assert!(app.user_progress.key_stats[&'a'].attempts > 3);
 
     // Both session kinds are now in the stream, most recent first.
     assert_eq!(app.user_progress.sessions.len(), 2);
     let ordered = app.user_progress.sessions_recent_first();
     assert_eq!(ordered.len(), 2);
-    assert!(matches!(ordered[0].kind, SessionKind::Dictation { .. }));
+    assert!(matches!(ordered[0].kind, SessionKind::Drill));
     assert!(matches!(ordered[1].kind, SessionKind::Lesson { .. }));
 
     // Zero-loss migration holds through a completely fresh on-disk read,
@@ -165,7 +171,7 @@ fn test_legacy_progress_survives_lesson_and_dictation_completion_via_app() {
     assert_eq!(reloaded.unlocked_tier, Tier::Tier2FullAlphabet);
     assert_eq!(
         reloaded.total_practice_seconds,
-        practice_seconds_after_lesson
+        practice_seconds_after_drill
     );
     assert_eq!(reloaded.sessions.len(), 2);
     assert_eq!(reloaded.version, mecanopro::core::model::SCHEMA_VERSION);

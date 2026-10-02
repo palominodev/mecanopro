@@ -4,8 +4,7 @@ use crate::tui::animation::ShipPhase;
 use crate::tui::app::{App, CurrentView};
 use crate::tui::ascii::AsciiArt;
 use crate::tui::components::{
-    DictationArea, DictationSummaryModal, KeyboardVisualizer, StatsBar, SummaryModal, TypingArea,
-    render_map_card, render_observatory,
+    KeyboardVisualizer, StatsBar, SummaryModal, TypingArea, render_map_card, render_observatory,
 };
 use crate::tui::planet_layout::{
     MapMode, MenuRow, band_viewport_start, display_index_of, info_column, map_mode, planet_layout,
@@ -54,18 +53,6 @@ pub fn render(f: &mut Frame, app: &App) {
         CurrentView::History => render_history(f, app),
         CurrentView::PlanetLessons => render_planet_lessons(f, app),
         CurrentView::Observatory => render_observatory_view(f, app),
-        CurrentView::Dictation => render_dictation(f, app),
-        CurrentView::DictationSummary => {
-            render_dictation(f, app);
-            if let Some(metrics) = &app.last_dictation_metrics {
-                let replay_count = app
-                    .current_dictation
-                    .as_ref()
-                    .map(|e| e.replay_count)
-                    .unwrap_or(0);
-                DictationSummaryModal::render(f, f.area(), metrics, replay_count);
-            }
-        }
     }
 }
 
@@ -475,13 +462,6 @@ fn render_main_menu(f: &mut Frame, app: &App) {
         ),
         Span::styled("Aterrizar/Abrir  ", Style::default().fg(Theme::TEXT)),
         Span::styled(
-            "[V] ",
-            Style::default()
-                .fg(Theme::SECONDARY)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled("Dictado  ", Style::default().fg(Theme::TEXT)),
-        Span::styled(
             "[D] ",
             Style::default()
                 .fg(Theme::ACCENT)
@@ -772,101 +752,6 @@ fn render_planet_lessons(f: &mut Frame, app: &App) {
     f.render_widget(footer, chunks[2]);
 }
 
-fn render_dictation(f: &mut Frame, app: &App) {
-    if let Some(engine) = &app.current_dictation {
-        let chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(4),  // Header
-                Constraint::Length(11), // Dictation Area (ribbon + slots + audio bar)
-                Constraint::Min(10),    // Keyboard visualizer
-                Constraint::Length(3),  // Footer
-            ])
-            .split(f.area());
-
-        // 1. Header
-        let header_lines = vec![
-            Line::from(vec![
-                Span::styled(
-                    "✦ MODO DICTADO AUDITIVO · RECEPTOR SUBESPACIAL ✦ ",
-                    Style::default()
-                        .fg(Theme::PRIMARY)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(
-                    "— Entrenamiento de Reflejo Auditivo-Motor",
-                    Style::default().fg(Theme::TEXT),
-                ),
-            ]),
-            Line::from(vec![
-                Span::styled(
-                    " Decodifica la transmisión de voz. ",
-                    Style::default().fg(Theme::SECONDARY),
-                ),
-                Span::styled(
-                    "Usa [TAB] si necesitas repetir la señal de audio.",
-                    Style::default().fg(Theme::MUTED),
-                ),
-            ]),
-        ];
-        let header = Paragraph::new(header_lines)
-            .block(Theme::retro_block(
-                "CANAL DE COMUNICACIÓN SUBESPACIAL",
-                Theme::PRIMARY,
-            ))
-            .alignment(Alignment::Center);
-        f.render_widget(header, chunks[0]);
-
-        // 2. Dictation Area
-        DictationArea::render(f, chunks[1], engine);
-
-        // 3. Spanish ISO Keyboard Visualizer
-        let target_char = engine.current_expected_char();
-        let keyboard_widget = KeyboardVisualizer::render(target_char);
-        f.render_widget(keyboard_widget, chunks[2]);
-
-        // 4. Dictation Footer
-        let footer_spans = vec![
-            Span::styled(
-                "[ESC] ",
-                Style::default()
-                    .fg(Theme::MUTED)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled("Menú   ", Style::default().fg(Theme::TEXT)),
-            Span::styled(
-                "[TAB] ",
-                Style::default()
-                    .fg(Theme::SECONDARY)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled("Repetir Audio   ", Style::default().fg(Theme::TEXT)),
-            Span::styled(
-                "[F2 / Shift+TAB] ",
-                Style::default()
-                    .fg(Theme::PRIMARY)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                "Cambiar Frecuencia (Voz)   ",
-                Style::default().fg(Theme::TEXT),
-            ),
-            Span::styled(
-                "[+ / -] ",
-                Style::default()
-                    .fg(Theme::ACCENT)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled("Velocidad Audio   ", Style::default().fg(Theme::TEXT)),
-            Span::styled("Regla: ≥ 96% precisión", Style::default().fg(Theme::MUTED)),
-        ];
-        let footer = Paragraph::new(Line::from(footer_spans))
-            .block(Theme::retro_block("MANDOS DE RECEPTOR", Theme::MUTED))
-            .alignment(Alignment::Center);
-        f.render_widget(footer, chunks[3]);
-    }
-}
-
 fn render_practice(f: &mut Frame, app: &App) {
     if let Some(engine) = &app.current_engine {
         let chunks = Layout::default()
@@ -1066,7 +951,7 @@ fn render_history(f: &mut Frame, app: &App) {
 
     if sessions.is_empty() {
         lines.push(Line::from(Span::styled(
-            "Aún no hay sesiones en tu bitácora. Completa una lección, un drill o un dictado para comenzar tu historial de vuelo.",
+            "Aún no hay sesiones en tu bitácora. Completa una lección o un drill para comenzar tu historial de vuelo.",
             Style::default().fg(Theme::MUTED),
         )));
     } else {

@@ -1,10 +1,8 @@
-use crate::audio::SystemTtsSpeaker;
 use crate::core::curriculum::Curriculum;
-use crate::core::dictation::{DictationConfig, DictationEngine, DictationMetrics};
 use crate::core::engine::TypingEngine;
 use crate::core::metrics::MetricsCalculator;
 use crate::core::model::{Lesson, SessionKind, SessionMetrics, SessionSummary, Tier, UserProgress};
-use crate::core::words::{observations_from_dictation_strokes, observations_from_text_strokes};
+use crate::core::words::observations_from_text_strokes;
 use crate::storage::ProgressRepository;
 use crate::tui::animation::{ShipAnimation, ShipPhase};
 use crate::tui::planet_layout::{MenuRow, build_rows};
@@ -18,9 +16,8 @@ const REDUCED_MOTION_ENV: &str = "MECANOPRO_REDUCED_MOTION";
 /// Test-only parallelism guard for [`REDUCED_MOTION_ENV`]. The lib tests
 /// run on parallel threads and every `App::new()`/`with_repository` reads
 /// the variable, so the env-mutating reduced-motion test's construction
-/// window (widened by `SystemTtsSpeaker`'s filesystem probes) leaked the
-/// pin into sibling constructions — observed as 1–6 flaky failures in 8
-/// of 10 runs before this lock. Choice: an `RwLock` instead of a plain
+/// window leaked the pin into sibling constructions — observed as 1–6
+/// flaky failures in 8 of 10 runs before this lock. Choice: an `RwLock` instead of a plain
 /// `Mutex`, so the hundreds of non-mutating `App::new()` constructions
 /// keep running fully in parallel (read lock) while the single env test
 /// takes the write lock for its whole mutation window. `App::new()` takes
@@ -44,8 +41,6 @@ pub enum CurrentView {
     Summary,
     Stats,
     History,
-    Dictation,
-    DictationSummary,
     PlanetLessons,
     /// Docked-planet observatory: the large ray-cast sphere view opened
     /// by confirming a docked ship. Enter opens the lessons, Esc
@@ -71,9 +66,6 @@ pub struct App {
     pub current_engine: Option<TypingEngine>,
     pub last_session_metrics: Option<SessionMetrics>,
     pub last_session_passed: bool,
-    pub current_dictation: Option<DictationEngine>,
-    pub last_dictation_metrics: Option<DictationMetrics>,
-    pub tts_speaker: SystemTtsSpeaker,
     pub should_quit: bool,
     pub ship: ShipAnimation,
     /// D10 reduced motion: `true` when `MECANOPRO_REDUCED_MOTION == "1"` at
@@ -102,7 +94,6 @@ impl App {
     /// Strategy: mandatory prerequisite, not optional).
     pub fn with_repository(repository: ProgressRepository) -> Self {
         let user_progress = repository.load();
-        let tts_speaker = SystemTtsSpeaker::new();
         let selected_planet_index = user_progress.unlocked_tier.index();
         // D10: read once, here — never in the render/event hot path.
         let reduced_motion = std::env::var(REDUCED_MOTION_ENV).as_deref() == Ok("1");
@@ -117,9 +108,6 @@ impl App {
             current_engine: None,
             last_session_metrics: None,
             last_session_passed: false,
-            current_dictation: None,
-            last_dictation_metrics: None,
-            tts_speaker,
             should_quit: false,
             ship: ShipAnimation::new(selected_planet_index),
             reduced_motion,
@@ -560,129 +548,6 @@ impl App {
             self.docked = false;
             self.ship.travel_to(self.selected_planet_index);
             self.settle_instantly_if_reduced();
-        }
-    }
-
-    pub fn start_dictation(&mut self, tier: Option<Tier>, word_count: Option<usize>) {
-        let selected_tier = tier.unwrap_or(self.user_progress.unlocked_tier);
-        let count = word_count.unwrap_or(8);
-        let words = Curriculum::generate_dictation_words(selected_tier, count);
-        let config = DictationConfig::default();
-
-        let mut engine = DictationEngine::new(words, config.clone());
-        if let Some(first_word) = engine.current_word() {
-            self.tts_speaker
-                .speak(first_word, config.speech_rate, config.current_voice_code());
-            engine.mark_audio_finished(Instant::now());
-        }
-
-        self.current_dictation = Some(engine);
-        self.current_view = CurrentView::Dictation;
-    }
-
-    pub fn restart_dictation(&mut self) {
-        if let Some(engine) = &self.current_dictation {
-            let words = engine.words.clone();
-            let config = engine.config.clone();
-            let mut new_engine = DictationEngine::new(words, config.clone());
-            if let Some(first_word) = new_engine.current_word() {
-                self.tts_speaker
-                    .speak(first_word, config.speech_rate, config.current_voice_code());
-                new_engine.mark_audio_finished(Instant::now());
-            }
-            self.current_dictation = Some(new_engine);
-            self.current_view = CurrentView::Dictation;
-        }
-    }
-
-    pub fn handle_dictation_key_input(&mut self, ch: char) {
-        if let Some(engine) = &mut self.current_dictation {
-            let rate = engine.config.speech_rate;
-            let voice = engine.config.current_voice_code().to_string();
-            let (word_finished, session_finished) = engine.handle_char(ch, Instant::now());
-
-            if session_finished {
-                let metrics = engine.calculate_metrics();
-                let (summary, kind) = metrics.to_session_parts();
-                let duration_secs = metrics.active_typing_duration.as_secs();
-
-                let word_observations =
-                    observations_from_dictation_strokes(&engine.words, &engine.keystrokes);
-                if let Ok(updated_progress) = self.repository.record_session_result(
-                    kind,
-                    &summary,
-                    duration_secs,
-                    &engine.keystrokes,
-                    &word_observations,
-                ) {
-                    self.user_progress = updated_progress;
-                }
-
-                self.last_dictation_metrics = Some(metrics);
-                self.tts_speaker.stop();
-                self.current_view = CurrentView::DictationSummary;
-            } else if let (true, Some(next_word)) = (word_finished, engine.current_word()) {
-                self.tts_speaker.speak(next_word, rate, &voice);
-                engine.mark_audio_finished(Instant::now());
-            }
-        }
-    }
-
-    pub fn replay_dictation_audio(&mut self) {
-        let (word, rate, voice) = match &mut self.current_dictation {
-            Some(engine) => {
-                let word = engine.current_word().map(|w| w.to_string());
-                let rate = engine.config.speech_rate;
-                let voice = engine.config.current_voice_code().to_string();
-                engine.record_replay_request();
-                engine.mark_audio_finished(Instant::now());
-                (word, rate, voice)
-            }
-            None => (None, 1.0, "es_AR-daniela-high".to_string()),
-        };
-
-        if let Some(word) = word {
-            self.tts_speaker.speak(&word, rate, &voice);
-        }
-    }
-
-    pub fn adjust_dictation_speed(&mut self, delta: f32) {
-        let (word, new_rate, voice) = match &mut self.current_dictation {
-            Some(engine) => {
-                let new_rate =
-                    ((engine.config.speech_rate + delta).clamp(0.5, 2.0) * 10.0).round() / 10.0;
-                engine.config.speech_rate = new_rate;
-                engine.mark_audio_finished(Instant::now());
-                let voice = engine.config.current_voice_code().to_string();
-                (
-                    engine.current_word().map(|w| w.to_string()),
-                    new_rate,
-                    voice,
-                )
-            }
-            None => (None, 1.0, "es_AR-daniela-high".to_string()),
-        };
-
-        if let Some(word) = word {
-            self.tts_speaker.speak(&word, new_rate, &voice);
-        }
-    }
-
-    pub fn toggle_dictation_voice(&mut self) {
-        let (word, rate, voice) = match &mut self.current_dictation {
-            Some(engine) => {
-                engine.config.next_voice();
-                let voice = engine.config.current_voice_code().to_string();
-                let word = engine.current_word().map(|w| w.to_string());
-                let rate = engine.config.speech_rate;
-                engine.mark_audio_finished(Instant::now());
-                (word, rate, voice)
-            }
-            None => (None, 1.0, "es_AR-daniela-high".to_string()),
-        };
-
-        if let Some(word) = word {
-            self.tts_speaker.speak(&word, rate, &voice);
         }
     }
 }
@@ -1478,46 +1343,6 @@ mod tests {
         ));
     }
 
-    /// RED for task 4.5 / GREEN via task 4.6: a completed dictation session
-    /// must append a `SessionKind::Dictation` history record and update
-    /// `key_stats` (design D0/spec: dictation feeds weak-key detection),
-    /// but must leave `total_practice_seconds` unchanged (dictation's
-    /// duration basis is `active_typing_duration`, not typing wall-clock).
-    /// Tier1 words are ASCII-only, so this drives the flow without needing
-    /// dead-key composition.
-    #[test]
-    fn test_dictation_completion_appends_record_updates_key_stats_leaves_practice_seconds_unchanged()
-     {
-        let dir = tempfile::tempdir().unwrap();
-        let repo = ProgressRepository::with_path(dir.path().join("progress.json"));
-        let mut app = App::with_repository(repo);
-        app.user_progress = UserProgress::default();
-        let starting_practice_seconds = app.user_progress.total_practice_seconds;
-
-        app.start_dictation(Some(Tier::Tier1Foundation), Some(2));
-        let words = app.current_dictation.as_ref().unwrap().words.clone();
-        for word in &words {
-            for ch in word.chars() {
-                app.handle_dictation_key_input(ch);
-            }
-        }
-
-        assert_eq!(app.current_view, CurrentView::DictationSummary);
-        assert_eq!(app.user_progress.sessions.len(), 1);
-        assert!(matches!(
-            app.user_progress.sessions[0].kind,
-            SessionKind::Dictation { .. }
-        ));
-        assert!(
-            !app.user_progress.key_stats.is_empty(),
-            "dictation keystrokes must feed key_stats for weak-key detection"
-        );
-        assert_eq!(
-            app.user_progress.total_practice_seconds, starting_practice_seconds,
-            "dictation must not accrue typing wall-clock practice time (design D0)"
-        );
-    }
-
     /// Finishing a typing session derives word observations from the real
     /// engine's keystrokes and persists them: a word typed wrongly first
     /// shows `errors > 0` in `word_stats`, surviving a reload from disk.
@@ -1609,128 +1434,6 @@ mod tests {
             3,
             "the failing word must be repeated in the drill"
         );
-    }
-
-    /// A completed dictation session records one attempt per dictated word,
-    /// with the mistyped word carrying the error.
-    #[test]
-    fn test_dictation_completion_records_word_stats_with_errors() {
-        let dir = tempfile::tempdir().unwrap();
-        let repo = ProgressRepository::with_path(dir.path().join("progress.json"));
-        let mut app = App::with_repository(repo);
-        app.user_progress = UserProgress::default();
-
-        app.current_dictation = Some(crate::core::dictation::DictationEngine::new(
-            vec!["casa".to_string(), "sala".to_string()],
-            crate::core::dictation::DictationConfig::default(),
-        ));
-        for ch in "caxsasala".chars() {
-            app.handle_dictation_key_input(ch);
-        }
-
-        assert_eq!(app.current_view, CurrentView::DictationSummary);
-        let casa = &app.user_progress.word_stats["casa"];
-        assert_eq!((casa.attempts, casa.errors), (1, 1));
-        let sala = &app.user_progress.word_stats["sala"];
-        assert_eq!((sala.attempts, sala.errors), (1, 0));
-        assert_eq!(
-            app.repository.load().word_stats,
-            app.user_progress.word_stats
-        );
-    }
-
-    /// Spec scenario "Dictation errors feed weak-key drill selection"
-    /// (revision 2, new): drives the full causal chain end-to-end --
-    /// dictation keystrokes -> `record_session_result`'s `key_stats`
-    /// accrual -> `start_adaptive_drill`'s weak-key filter (error rate or
-    /// latency threshold) -> `Curriculum::generate_weak_word_drill`. Builds
-    /// the `DictationEngine` directly with a fixed two-word list (instead
-    /// of `App::start_dictation`'s randomized tier pool) so the exact
-    /// keystroke sequence -- and therefore which single key crosses the
-    /// weak-key threshold -- is deterministic. Uses `App::with_repository`
-    /// so nothing touches the real XDG `progress.json`.
-    #[test]
-    fn test_dictation_errors_feed_weak_key_drill_selection() {
-        let dir = tempfile::tempdir().unwrap();
-        let repo = ProgressRepository::with_path(dir.path().join("progress.json"));
-        let mut app = App::with_repository(repo);
-        app.user_progress = UserProgress::default();
-
-        app.current_dictation = Some(crate::core::dictation::DictationEngine::new(
-            vec!["casa".to_string(), "sala".to_string()],
-            crate::core::dictation::DictationConfig::default(),
-        ));
-
-        // "casa": c-a-s-a. Deliberately mistype the first 'a' (expected 'a',
-        // typed 'x') before correcting it, so key_stats['a'] gets one error
-        // among several correct attempts -- enough to cross the
-        // `error_rate() > 4.0` weak-key threshold -- while every other key
-        // typed here (c, s, l) stays error-free and therefore under it.
-        app.handle_dictation_key_input('c');
-        app.handle_dictation_key_input('x');
-        app.handle_dictation_key_input('a');
-        app.handle_dictation_key_input('s');
-        app.handle_dictation_key_input('a');
-        // "sala": s-a-l-a, typed correctly, completes the session.
-        app.handle_dictation_key_input('s');
-        app.handle_dictation_key_input('a');
-        app.handle_dictation_key_input('l');
-        app.handle_dictation_key_input('a');
-
-        assert_eq!(app.current_view, CurrentView::DictationSummary);
-        let a_stat = app
-            .user_progress
-            .key_stats
-            .get(&'a')
-            .expect("dictation must have fed key_stats for 'a'");
-        assert!(
-            a_stat.error_rate() > 4.0,
-            "'a' must cross the weak-key error-rate threshold, got {}",
-            a_stat.error_rate()
-        );
-        for other in ['c', 's', 'l'] {
-            if let Some(stat) = app.user_progress.key_stats.get(&other) {
-                assert!(
-                    stat.error_rate() <= 4.0 && stat.avg_latency_ms() <= 400.0,
-                    "key '{other}' must not also cross the weak-key threshold"
-                );
-            }
-        }
-
-        app.start_adaptive_drill();
-
-        let drill_text = app
-            .current_engine
-            .as_ref()
-            .expect("start_adaptive_drill must start a practice session")
-            .lesson
-            .text
-            .clone();
-        assert!(
-            !drill_text.is_empty(),
-            "generated drill text must not be empty"
-        );
-        // The dictated "casa" carried the error, so it is the failing word:
-        // it leads the drill and appears most often. Every other token is a
-        // real pool word containing the weak key 'a'.
-        let real_pool: std::collections::HashSet<&str> = Tier::ALL
-            .iter()
-            .filter(|t| **t != Tier::Tier4NumbersAndSymbols)
-            .flat_map(|t| Curriculum::dictation_word_pool(*t).iter().copied())
-            .collect();
-        let tokens: Vec<&str> = drill_text.split(' ').collect();
-        let count = |w: &str| tokens.iter().filter(|t| **t == w).count();
-        assert_eq!(count("casa"), 3, "failing word repeated: {drill_text:?}");
-        for token in &tokens {
-            assert!(
-                *token == "casa" || real_pool.contains(token),
-                "{token:?} is neither the failing word nor a real pool word"
-            );
-            assert!(
-                token.contains('a'),
-                "{token:?} must contain the weak key 'a'"
-            );
-        }
     }
 
     #[test]

@@ -23,15 +23,6 @@ impl AsciiArt {
         "    *  🔥  *    ",
     ];
 
-    /// Retro Satellite ASCII for Dictation Mode / Audio
-    pub const SATELLITE: [&'static str; 5] = [
-        "   📡  .-''''-.   ",
-        "     .'        '. ",
-        "    /   ✦  🛸  ✦  \\",
-        "    \\            /",
-        "     '.________.' ",
-    ];
-
     /// Retro Warning / Distress Beacon ASCII for Failed Mission (Accuracy < 96%)
     pub const WARNING_BEACON: [&'static str; 6] = [
         "      /!\\       ",

@@ -133,7 +133,6 @@ impl EventHandler {
                 KeyCode::Home | KeyCode::Char('g') => app.planet_home(),
                 KeyCode::End | KeyCode::Char('G') => app.planet_end(),
                 KeyCode::Enter => app.confirm_planet(),
-                KeyCode::Char('v') | KeyCode::Char('V') => app.start_dictation(None, None),
                 KeyCode::Char('d') | KeyCode::Char('D') => app.start_adaptive_drill(),
                 KeyCode::Char('e') | KeyCode::Char('E') => app.current_view = CurrentView::Stats,
                 KeyCode::Char('b') | KeyCode::Char('B') => app.current_view = CurrentView::History,
@@ -155,7 +154,6 @@ impl EventHandler {
             },
 
             CurrentView::Stats => match key.code {
-                KeyCode::Char('v') | KeyCode::Char('V') => app.start_dictation(None, None),
                 KeyCode::Char('d') | KeyCode::Char('D') => app.start_adaptive_drill(),
                 KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') | KeyCode::Char('Q') => {
                     app.return_to_star_map();
@@ -167,37 +165,6 @@ impl EventHandler {
                 KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') | KeyCode::Char('Q') => {
                     app.return_to_star_map();
                 }
-                _ => {}
-            },
-
-            CurrentView::Dictation => {
-                if key.modifiers.contains(KeyModifiers::CONTROL)
-                    && (key.code == KeyCode::Char('v') || key.code == KeyCode::Char('V'))
-                {
-                    app.toggle_dictation_voice();
-                    return;
-                }
-
-                match key.code {
-                    KeyCode::Esc => {
-                        app.tts_speaker.stop();
-                        app.return_to_star_map();
-                    }
-                    KeyCode::Tab => app.replay_dictation_audio(),
-                    KeyCode::BackTab | KeyCode::F(2) => app.toggle_dictation_voice(),
-                    KeyCode::Char('+') | KeyCode::Char('=') => app.adjust_dictation_speed(0.1),
-                    KeyCode::Char('-') | KeyCode::Char('_') => app.adjust_dictation_speed(-0.1),
-                    KeyCode::Char(ch) => app.handle_dictation_key_input(ch),
-                    _ => {}
-                }
-            }
-
-            CurrentView::DictationSummary => match key.code {
-                KeyCode::Char('r') | KeyCode::Char('R') => app.restart_dictation(),
-                KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Enter => {
-                    app.start_dictation(None, None)
-                }
-                KeyCode::Esc | KeyCode::Char('m') | KeyCode::Char('M') => app.return_to_star_map(),
                 _ => {}
             },
 
@@ -927,7 +894,7 @@ mod tests {
     }
 
     #[test]
-    fn test_stats_and_dictation_return_to_star_map() {
+    fn test_stats_return_to_star_map() {
         let tier5_lesson = App::new()
             .available_lessons()
             .into_iter()
@@ -945,19 +912,6 @@ mod tests {
             app.selected_planet_index,
             Tier::Tier5SpeedAndCadence.index(),
             "Stats back must derive the planet from the selected lesson via return_to_star_map"
-        );
-
-        let mut app = App::new();
-        app.user_progress = UserProgress::default();
-        app.selected_lesson_index = app.flat_index_of(&tier5_lesson.id).unwrap();
-        app.selected_planet_index = Tier::Tier1Foundation.index();
-        app.current_view = CurrentView::Dictation;
-        EventHandler::handle_key(&mut app, key(KeyCode::Esc));
-        assert_eq!(app.current_view, CurrentView::MainMenu);
-        assert_eq!(
-            app.selected_planet_index,
-            Tier::Tier5SpeedAndCadence.index(),
-            "Dictation back must derive the planet from the selected lesson via return_to_star_map"
         );
     }
 
@@ -1007,7 +961,7 @@ mod tests {
     #[test]
     fn test_map_key_bindings() {
         // `d` (adaptive drill) is intentionally skipped: it needs real key
-        // stats/audio wiring, already covered indirectly by
+        // stats wiring, already covered indirectly by
         // `test_return_from_session_adaptive_drill_goes_to_star_map` in `app.rs`.
         let cases: Vec<(&str, usize, KeyEvent, MenuEffect)> = vec![
             // D11 horizontal band nav: Left/h and Right/l pan the band;
@@ -1029,12 +983,6 @@ mod tests {
                 0,
                 key(KeyCode::Char('e')),
                 MenuEffect::View(CurrentView::Stats),
-            ),
-            (
-                "v",
-                0,
-                key(KeyCode::Char('v')),
-                MenuEffect::View(CurrentView::Dictation),
             ),
             (
                 "b",
