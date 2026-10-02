@@ -2607,27 +2607,6 @@ impl Curriculum {
             ],
         }
     }
-
-    /// Generates a randomized list of meaningful Spanish words for dictation
-    pub fn generate_dictation_words(tier: Tier, count: usize) -> Vec<String> {
-        let pool = Self::dictation_word_pool(tier);
-        let mut rng = thread_rng();
-        let mut selected = Vec::new();
-
-        let mut shuffled: Vec<&str> = pool.to_vec();
-        shuffled.shuffle(&mut rng);
-
-        while selected.len() < count {
-            for word in &shuffled {
-                if selected.len() < count {
-                    selected.push((*word).to_string());
-                }
-            }
-            shuffled.shuffle(&mut rng);
-        }
-
-        selected
-    }
 }
 
 /// Words contributed per rank in the adaptive drill: the hardest word
@@ -3114,22 +3093,6 @@ mod tests {
         assert_eq!(drill.min_accuracy, 96.0);
         assert!(drill.section_id.is_empty());
         assert!(!drill.text.is_empty());
-    }
-
-    #[test]
-    fn test_dictation_words_generation() {
-        let words_t1 = Curriculum::generate_dictation_words(Tier::Tier1Foundation, 5);
-        assert_eq!(words_t1.len(), 5);
-        for w in &words_t1 {
-            assert!(!w.is_empty());
-        }
-
-        let words_t3 = Curriculum::generate_dictation_words(Tier::Tier3SpanishOrthography, 8);
-        assert_eq!(words_t3.len(), 8);
-        let has_accents_or_diacritics = words_t3
-            .iter()
-            .any(|w| w.chars().any(|c| "áéíóúüñ".contains(c)));
-        assert!(has_accents_or_diacritics);
     }
 
     #[test]

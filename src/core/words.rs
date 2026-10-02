@@ -2,12 +2,10 @@
 //! keystroke stream. Runs once at session end, never on the keystroke hot
 //! path, so allocation here is fine.
 //!
-//! `KeyStroke` carries no word index, so word boundaries are reconstructed:
-//! typing text splits on its space strokes, dictation (which has no space
-//! strokes) is cut using the known word list. Latency is always read from
-//! `KeyStroke::latency`; `KeyStroke::timestamp` means elapsed-since-start in
-//! the typing engine but per-keystroke latency in the dictation engine, so it
-//! is deliberately never used.
+//! `KeyStroke` carries no word index, so word boundaries are reconstructed by
+//! splitting the typing text on its space strokes. Latency is always read from
+//! `KeyStroke::latency`; `KeyStroke::timestamp` is elapsed-since-start in the
+//! typing engine, so it is deliberately never used.
 
 use super::model::KeyStroke;
 
@@ -98,39 +96,6 @@ pub fn observations_from_text_strokes(strokes: &[KeyStroke]) -> Vec<WordObservat
         }
     }
     current.finish_into(&mut out);
-    out
-}
-
-/// Observations for a dictation session. The stream is the concatenation of
-/// `words` with no space strokes, so each word consumes exactly
-/// `word.chars().count()` *correct* strokes; wrong strokes met on the way are
-/// that word's errors. A word the stream ends in the middle of is dropped:
-/// it was not completed, so it is not an attempt.
-pub fn observations_from_dictation_strokes<S: AsRef<str>>(
-    words: &[S],
-    strokes: &[KeyStroke],
-) -> Vec<WordObservation> {
-    let mut out = Vec::new();
-    let mut remaining = strokes.iter();
-
-    for word in words {
-        let word = word.as_ref();
-        let mut current = WordInProgress::default();
-        let mut still_needed = word.chars().count();
-
-        while still_needed > 0 {
-            let Some(stroke) = remaining.next() else {
-                return out;
-            };
-            current.add(stroke);
-            if stroke.is_correct {
-                still_needed -= 1;
-            }
-        }
-
-        current.text = word.to_string();
-        current.finish_into(&mut out);
-    }
     out
 }
 
@@ -241,68 +206,6 @@ mod tests {
         assert!(observations_from_text_strokes(&[]).is_empty());
     }
 
-    #[test]
-    fn test_dictation_splits_concatenated_words_by_char_count() {
-        let words = vec!["casa".to_string(), "luna".to_string()];
-        let strokes = correct("casaluna", 20);
-        assert_eq!(
-            observations_from_dictation_strokes(&words, &strokes),
-            vec![obs("casa", 0, 80), obs("luna", 0, 80)]
-        );
-    }
-
-    #[test]
-    fn test_dictation_error_mid_word_counts_for_that_word_only() {
-        let words = vec!["casa".to_string(), "luna".to_string()];
-        let mut strokes = correct("ca", 10);
-        strokes.push(stroke('s', 'z', 10)); // wrong, not consumed as progress
-        strokes.push(stroke('s', 's', 10));
-        strokes.push(stroke('a', 'a', 10));
-        strokes.extend(correct("luna", 10));
-
-        assert_eq!(
-            observations_from_dictation_strokes(&words, &strokes),
-            vec![obs("casa", 1, 50), obs("luna", 0, 40)]
-        );
-    }
-
-    #[test]
-    fn test_dictation_counts_chars_not_bytes() {
-        let words = vec!["año".to_string(), "sol".to_string()];
-        let strokes = correct("añosol", 10);
-        assert_eq!(
-            observations_from_dictation_strokes(&words, &strokes),
-            vec![obs("año", 0, 30), obs("sol", 0, 30)]
-        );
-    }
-
-    #[test]
-    fn test_dictation_drops_a_word_left_incomplete_by_the_stream() {
-        let words = vec!["casa".to_string(), "luna".to_string()];
-        let strokes = correct("casalu", 10);
-        assert_eq!(
-            observations_from_dictation_strokes(&words, &strokes),
-            vec![obs("casa", 0, 40)]
-        );
-    }
-
-    #[test]
-    fn test_dictation_skips_non_alphabetic_words_but_still_consumes_strokes() {
-        let words = vec!["42".to_string(), "luna".to_string()];
-        let strokes = correct("42luna", 10);
-        assert_eq!(
-            observations_from_dictation_strokes(&words, &strokes),
-            vec![obs("luna", 0, 40)]
-        );
-    }
-
-    #[test]
-    fn test_dictation_empty_inputs_yield_nothing() {
-        let words = vec!["casa".to_string()];
-        assert!(observations_from_dictation_strokes(&words, &[]).is_empty());
-        assert!(observations_from_dictation_strokes::<String>(&[], &correct("casa", 1)).is_empty());
-    }
-
     // --- normalize_word_key ---
 
     #[test]
@@ -400,24 +303,5 @@ mod tests {
             .map(|o| (o.word.as_str(), o.errors))
             .collect();
         assert_eq!(summary, vec![("casa", 2), ("luna", 1)]);
-    }
-
-    #[test]
-    fn test_real_dictation_engine_wrong_stroke_is_attributed_to_the_right_word() {
-        use crate::core::dictation::{DictationConfig, DictationEngine};
-        let words = vec!["casa".to_string(), "sal".to_string()];
-        let mut engine = DictationEngine::new(words.clone(), DictationConfig::default());
-        let start = std::time::Instant::now();
-        for (i, ch) in "caxsasal".chars().enumerate() {
-            engine.handle_char(ch, start + Duration::from_millis(10 * (i as u64 + 1)));
-        }
-
-        let observed = observations_from_dictation_strokes(&engine.words, &engine.keystrokes);
-
-        let summary: Vec<(&str, usize)> = observed
-            .iter()
-            .map(|o| (o.word.as_str(), o.errors))
-            .collect();
-        assert_eq!(summary, vec![("casa", 1), ("sal", 0)]);
     }
 }
