@@ -23,7 +23,7 @@ User request: "vamos eliminar la función de dictado". The feature needs an exte
 - Delivery strategy: ask-on-risk. Forecast ~2,000 authored changed lines, almost all deletions (audio 368, dictation 464, components 356, app/ui/event ~600 incl. tests, README ~60, tests ~150). Chain strategy: `feature-branch-chain` (chosen by the user). Integration branch `feat/remove-dictation`; one slice branch per task, each based on the previous: `feat/remove-dictation-01-tui`, `-02-core-audio`, `-03-legacy-docs`. Push / PR creation stay the user's call.
 
 ## Tasks
-- [ ] T1 (tui) Stop using dictation from the TUI: remove `CurrentView::Dictation/DictationSummary`, app fields/methods, event key handling (`v`, Dictation arms), `render_dictation`, menu hints, components, `SATELLITE`; delete/trim dictation tests (app.rs, event.rs); rewrite `tests/session_integration_test.rs` legacy-progress test around lesson + adaptive drill. Route: delegated writer.
+- [x] T1 (tui) Stop using dictation from the TUI: remove `CurrentView::Dictation/DictationSummary`, app fields/methods, event key handling (`v`, Dictation arms), `render_dictation`, menu hints, components, `SATELLITE`; delete/trim dictation tests (app.rs, event.rs); rewrite `tests/session_integration_test.rs` legacy-progress test around lesson + adaptive drill. Route: delegated writer.
 - [ ] T2 (core+audio) Delete `src/audio/`, `core/dictation.rs`, `evaluate_dictation`, `observations_from_dictation_strokes`, `generate_dictation_words`, `tests/dictation_integration_test.rs`; fix mod/lib exports and module docs. Route: delegated writer.
 - [ ] T3 (legacy+docs) Rename `dictation_word_pool` -> `word_pool`; mark `SessionKind::Dictation` legacy (doc comments, keep history arm and repository no-op arm); add legacy-file regression test (progress.json with a Dictation session and bucket still loads, not quarantined); README cleanup; reword empty-history text. Route: delegated writer.
 
@@ -33,7 +33,9 @@ User request: "vamos eliminar la función de dictado". The feature needs an exte
 - `cargo test`, `cargo clippy -- -D warnings`, `cargo fmt --check` green; no unused deps.
 
 ## Progress
+- T1 done on `feat/remove-dictation-01-tui`, commit d7d6c51 (8 files, +41/-868). Route: delegated writer (trigger: 2+ non-trivial files). Evidence: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` clean; `cargo test` 338 lib + 1 + 2 passed (parent spot check). Review: assessed medium / slice_budget_reached, consent granted, native review (reliability lens) approved and acknowledged. Advisory, non-blocking, deferred: (a) the rewritten session integration test only asserts `total_practice_seconds` does not decrease after a drill; (b) drill text is randomized so completion by feeding `lesson.text` could be flaky if the pool yields dead-key text; (c) the deleted `test_dictation_errors_feed_weak_key_drill_selection` end-to-end weak-key drill selection test has no typing-session replacement. Candidate follow-up in T3.
+- Reviewed boundary: d7d6c51.
 - Branch `feat/remove-dictation` created from master. Explore map done (delegated mapper).
 
 ## Next step
-Start T1 on `feat/remove-dictation-01-tui`.
+Start T2 on `feat/remove-dictation-02-core-audio` (based on slice 1).
