@@ -25,7 +25,7 @@ User request: "vamos eliminar la función de dictado". The feature needs an exte
 ## Tasks
 - [x] T1 (tui) Stop using dictation from the TUI: remove `CurrentView::Dictation/DictationSummary`, app fields/methods, event key handling (`v`, Dictation arms), `render_dictation`, menu hints, components, `SATELLITE`; delete/trim dictation tests (app.rs, event.rs); rewrite `tests/session_integration_test.rs` legacy-progress test around lesson + adaptive drill. Route: delegated writer.
 - [x] T2 (core+audio) Delete `src/audio/`, `core/dictation.rs`, `evaluate_dictation`, `observations_from_dictation_strokes`, `generate_dictation_words`, `tests/dictation_integration_test.rs`; fix mod/lib exports and module docs. Route: delegated writer.
-- [ ] T3 (legacy+docs) Rename `dictation_word_pool` -> `word_pool`; mark `SessionKind::Dictation` legacy (doc comments, keep history arm and repository no-op arm); add legacy-file regression test (progress.json with a Dictation session and bucket still loads, not quarantined); README cleanup; reword empty-history text. Route: delegated writer.
+- [x] T3 (legacy+docs) Rename `dictation_word_pool` -> `word_pool`; mark `SessionKind::Dictation` legacy (doc comments, keep history arm and repository no-op arm); add legacy-file regression test (progress.json with a Dictation session and bucket still loads, not quarantined); README cleanup; reword empty-history text. Route: delegated writer.
 
 ## Acceptance criteria
 - `rg -i dictat` only hits: legacy variants + their tests/comments, historical `odd/` docs.
@@ -36,8 +36,11 @@ User request: "vamos eliminar la función de dictado". The feature needs an exte
 - T1 done on `feat/remove-dictation-01-tui`, commit d7d6c51 (8 files, +41/-868). Route: delegated writer (trigger: 2+ non-trivial files). Evidence: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` clean; `cargo test` 338 lib + 1 + 2 passed (parent spot check). Review: assessed medium / slice_budget_reached, consent granted, native review (reliability lens) approved and acknowledged. Advisory, non-blocking, deferred: (a) the rewritten session integration test only asserts `total_practice_seconds` does not decrease after a drill; (b) drill text is randomized so completion by feeding `lesson.text` could be flaky if the pool yields dead-key text; (c) the deleted `test_dictation_errors_feed_weak_key_drill_selection` end-to-end weak-key drill selection test has no typing-session replacement. Candidate follow-up in T3.
 - T2 done on `feat/remove-dictation-02-core-audio`, commit d2f2160 (8 files, +4/-1170). Route: delegated writer (trigger: 2+ non-trivial files). Evidence: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo build --release` clean; `cargo test` 322 lib + 2 integration passed (parent spot check). Review: medium / slice_budget_reached, consent granted, native review (reliability lens) approved, no findings, acknowledged. The accumulated-branch candidate (master..T1, requested by the stop hook) was also reviewed: approved with the same T1 advisories.
 - Note: `unicode-segmentation` in Cargo.toml has no references in src/tests (already unused at HEAD before this feature; AGENTS.md section 3 names it). Left untouched: removal is the user's call.
-- Reviewed boundary: d2f2160.
+- T3 done on `feat/remove-dictation-03-legacy-docs`, commit c4104da (5 files, +122/-85). Route: delegated writer. Evidence: new `test_legacy_file_with_removed_session_kind_loads_without_quarantine` passed against the unmodified code before the rename (legacy variants premise confirmed); `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` clean; `cargo test` 323 lib + 2 integration passed (parent spot check). Review: assessed medium but `under_budget` (215 lines since d2f2160), not due; stays pending in the slice.
+- Acceptance: `rg -i dictat|piper|espeak` outside `odd/` hits only legacy variants/arms/comments/tests. Running total ~1,400 authored changed lines across 3 slices.
+- Reviewed boundary: d2f2160 (T3 pending under budget).
+- Delivery: chain `feat/remove-dictation` (plan + docs) -> `-01-tui` (d7d6c51) -> `-02-core-audio` (d2f2160) -> `-03-legacy-docs` (c4104da). Nothing pushed; push + PR creation await user authorization.
 - Branch `feat/remove-dictation` created from master. Explore map done (delegated mapper).
 
 ## Next step
-Start T3 on `feat/remove-dictation-03-legacy-docs` (based on slice 2).
+User decides on push / PRs; optional follow-ups: advisory test-hardening (T1 review) and the unused `unicode-segmentation` dependency.
