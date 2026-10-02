@@ -1003,6 +1003,7 @@ fn session_history_line(record: &SessionRecord) -> Line<'static> {
             "DRILL".to_string(),
             "Práctica de palabras débiles".to_string(),
         ),
+        // Legacy kind: no longer produced, but older history files still hold it.
         SessionKind::Dictation {
             completed_words,
             total_words,
@@ -2439,7 +2440,7 @@ mod tests {
         );
         assert!(
             rendered.contains("DICTADO"),
-            "expected a Dictation-kind entry in:\n{rendered}"
+            "expected a legacy Dictation-kind entry in:\n{rendered}"
         );
 
         // Spec rev 2's three negative scenarios (history-view content scope):

@@ -2517,7 +2517,9 @@ impl Curriculum {
         ranked.into_iter().map(|(word, _, _)| word).collect()
     }
 
-    pub fn dictation_word_pool(tier: Tier) -> &'static [&'static str] {
+    /// Spanish real-word pool for `tier`, used by the adaptive weak-words
+    /// drill (cold-start fallback and padding).
+    pub fn word_pool(tier: Tier) -> &'static [&'static str] {
         match tier {
             Tier::Tier1Foundation => &[
                 "casa", "sala", "falda", "sello", "dedo", "soda", "fosa", "dado", "salsa", "lado",
@@ -2617,12 +2619,12 @@ const DRILL_MIN_FAILING_WORDS: usize = 5;
 /// Approximate drill length (in words) when padding is needed.
 const DRILL_TARGET_WORDS: usize = 20;
 
-/// Distinct dictation-pool words from `tiers`, in pool order.
+/// Distinct Spanish real words from the `tiers` word pools, in pool order.
 fn pool_words(tiers: &[Tier]) -> Vec<&'static str> {
     let mut seen = HashSet::new();
     tiers
         .iter()
-        .flat_map(|tier| Curriculum::dictation_word_pool(*tier).iter().copied())
+        .flat_map(|tier| Curriculum::word_pool(*tier).iter().copied())
         .filter(|word| seen.insert(*word))
         .collect()
 }
@@ -2804,7 +2806,7 @@ mod tests {
         Tier::ALL
             .iter()
             .filter(|t| **t != Tier::Tier4NumbersAndSymbols)
-            .flat_map(|t| Curriculum::dictation_word_pool(*t).iter().copied())
+            .flat_map(|t| Curriculum::word_pool(*t).iter().copied())
             .collect()
     }
 
@@ -3012,7 +3014,7 @@ mod tests {
         // match, so the drill must fall back to Tier1/Tier2 words.
         let tier1_2: HashSet<&str> = [Tier::Tier1Foundation, Tier::Tier2FullAlphabet]
             .iter()
-            .flat_map(|t| Curriculum::dictation_word_pool(*t).iter().copied())
+            .flat_map(|t| Curriculum::word_pool(*t).iter().copied())
             .collect();
         for weak in [vec!['_', '1', '0'], vec!['_'], vec!['t']] {
             let mut rng = StdRng::seed_from_u64(5);
@@ -3034,7 +3036,7 @@ mod tests {
         let pool = real_pool_words();
         let tier1_2: HashSet<&str> = [Tier::Tier1Foundation, Tier::Tier2FullAlphabet]
             .iter()
-            .flat_map(|t| Curriculum::dictation_word_pool(*t).iter().copied())
+            .flat_map(|t| Curriculum::word_pool(*t).iter().copied())
             .collect();
         let mut rng = StdRng::seed_from_u64(1);
 

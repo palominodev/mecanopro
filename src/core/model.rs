@@ -237,8 +237,8 @@ pub(crate) fn schema_v1() -> u32 {
 }
 
 /// The eight metric fields shared by every session kind, regardless of
-/// whether the session was a typing lesson, an adaptive drill, or a
-/// dictation exercise (design D5).
+/// whether the session was a typing lesson, an adaptive drill, or a legacy
+/// dictation exercise from an older version (design D5).
 ///
 /// Deliberately does **not** derive `Default`: `SessionMetrics::default()`
 /// uses `accuracy: 100.0`/`consistency: 100.0` (the project's "no data yet
@@ -269,6 +269,8 @@ pub enum SessionKind {
         passed: bool,
     },
     Drill,
+    /// Legacy: no longer produced. Kept only so saved history files written by
+    /// older versions still deserialize instead of being quarantined.
     Dictation {
         avg_reaction_time_ms: f64,
         min_reaction_time_ms: f64,
@@ -284,6 +286,8 @@ pub enum SessionKind {
 pub enum SessionKindTag {
     Lesson,
     Drill,
+    /// Legacy: no longer produced. Kept only so saved history files written by
+    /// older versions still deserialize instead of being quarantined.
     Dictation,
 }
 
@@ -304,7 +308,7 @@ pub struct SessionRecord {
     /// Same clock as `BestScore::completed_at`.
     pub completed_at: u64,
     /// Kind-specific basis: typing wall-clock for `Lesson`/`Drill`, active
-    /// typing window for `Dictation` (design D5).
+    /// typing window for legacy `Dictation` records (design D5).
     pub duration_secs: u64,
     pub summary: SessionSummary,
     pub kind: SessionKind,
@@ -331,8 +335,8 @@ pub const SECONDS_PER_DAY: u64 = 86_400;
 /// This is a knowing approximation for this app's `es_AR` (UTC-3) audience:
 /// `Cargo.toml` carries no timezone crate, and adding one for a single
 /// divisor is disproportionate — std has no timezone support at all, and
-/// per-thread local-offset lookups are unreliable in a process that also
-/// runs a TTS speaker. A session after 21:00 local time lands in the next
+/// per-thread local-offset lookups are unreliable in a multi-threaded
+/// process. A session after 21:00 local time lands in the next
 /// UTC day's bucket. The error is bounded to one bin boundary and does not
 /// affect lifetime totals (bucket merge is additive and order-independent);
 /// buckets are aggregate bins, never displayed as calendar dates. This
@@ -344,7 +348,7 @@ pub fn day_index(completed_at: u64) -> u64 {
 
 /// A `(day, kind)`-bucketed aggregate roll-up of collapsed
 /// [`SessionRecord`]s (design D6). Keyed by day **and** kind, never by day
-/// alone: typing measures wall-clock `elapsed` while dictation measures
+/// alone: typing measures wall-clock `elapsed` while legacy dictation measured
 /// `active_typing_duration`, so summing `duration_secs` across kinds would
 /// produce a basis-mixed rate. A combined lifetime CPM must never be
 /// computed from this struct.
@@ -1038,7 +1042,7 @@ mod tests {
     }
 
     #[test]
-    fn test_session_kind_serde_round_trip_dictation() {
+    fn test_session_kind_serde_round_trip_legacy_dictation() {
         let kind = SessionKind::Dictation {
             avg_reaction_time_ms: 320.5,
             min_reaction_time_ms: 180.0,

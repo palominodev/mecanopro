@@ -38,26 +38,18 @@ MecanoPro is a lightweight, distraction-free **Terminal User Interface (TUI)** b
 - Interactive keyboard map visualizer rendered directly with Unicode/ANSI blocks.
 - 100% keyboard-driven workflow with vim-friendly and intuitive keybindings.
 
-### 2. Audio Dictation Mode (TTS)
-- Spanish isolated words speech synthesis (Piper neural voices, falling back to `espeak-ng` / `espeak` / `spd-say`).
-- Non-blocking asynchronous audio engine with zero keystroke latency.
-- Real-time character-by-character validation with masked placeholders (`_ _ _ _`).
-- Replay audio on-demand (`Tab`) and live speech speed adjustments (`+` / `-`).
-- **Auditory Reaction Time (ms)** diagnostic metric alongside net CPM and accuracy.
-
-### 3. Analytics & Diagnostics Engine
+### 2. Analytics & Diagnostics Engine
 - **Speed**: CPM (Characters Per Minute) and WPM, live during a session and in the end-of-session summary.
 - **Precision**: Accuracy percentage and consistency index (standard deviation of keystroke latency).
 - **Diagnostics**:
-  - Auditory reaction latency per word, in the dictation summary.
   - Per-key attempt/error/latency statistics, surfaced as a weak-key table.
-  - Adaptive drills that review the words you fail most (with real-word fallback while there is no word history yet), fed by both typing and dictation.
+  - Adaptive drills that review the words you fail most (with real-word fallback while there is no word history yet), fed by typing.
 
-### 4. Persistence (XDG Standard)
+### 3. Persistence (XDG Standard)
 - Stored locally at `$XDG_DATA_HOME/mecanopro/progress.json` (or `~/.local/share/mecanopro/`).
 - Versioned schema with forward migration; a corrupt file is quarantined, never overwritten.
 - Track tier unlocks, personal bests, and weak keys and words over time.
-- Per-session history — typing, drills and dictation in one stream — with older sessions rolled up into daily aggregates so the file stays bounded.
+- Per-session history — typing and drills — with older sessions rolled up into daily aggregates so the file stays bounded.
 
 ---
 
@@ -69,19 +61,15 @@ Clean/Hexagonal Architecture separating pure domain logic from terminal renderin
 src/
 ├── core/                  # Pure Rust domain (Zero crossterm/ratatui dependency)
 │   ├── engine.rs          # Typing session state machine & keystroke evaluator
-│   ├── dictation.rs       # Dictation session engine, reaction metrics & slots
 │   ├── metrics.rs         # CPM, WPM, accuracy, consistency, and progression gate
-│   ├── curriculum.rs      # Tiers, lessons, dictation pools, and adaptive text generators
+│   ├── curriculum.rs      # Tiers, lessons, word pools, and adaptive text generators
 │   └── model.rs           # Core domain types (KeyStroke, Session, Metrics)
-│
-├── audio/                 # Text-To-Speech outbound port & adapter
-│   └── mod.rs             # SystemTtsSpeaker (non-blocking spd-say / espeak-ng)
 │
 ├── tui/                   # Presentation & Terminal I/O layer
 │   ├── app.rs             # Application state coordinator & event loop
 │   ├── event.rs           # Terminal input event stream (Crossterm backend)
 │   ├── ui.rs              # Ratatui rendering pipeline
-│   ├── components/        # Practice area, dictation area, stats dashboard
+│   ├── components/        # Practice area, stats dashboard
 │   └── theme.rs           # Color palettes and styling tokens
 │
 ├── storage/               # XDG filesystem persistence (serde_json)
@@ -117,7 +105,7 @@ src/
 | **Rust** | 1.85 or newer — the crate uses edition 2024 |
 | **Terminal** | Any ANSI/UTF-8 terminal. 103x39 or larger renders the full star map; smaller terminals fall back to a compact layout automatically |
 | **Keyboard** | Designed for the Spanish layout (`ñ`, dead-key accents, `¿ ¡`) |
-| **OS** | Typing mode runs anywhere Rust does. Dictation mode needs a Linux/BSD speech binary — see below |
+| **OS** | Runs anywhere Rust does |
 
 Install Rust with [rustup](https://rustup.rs) if you don't have it:
 
@@ -153,55 +141,6 @@ cargo test               # run the test suite
 ```
 
 The debug build is noticeably slower to start; use `--release` for actual practice.
-
-## Dictation Mode (optional)
-
-Typing lessons work with no extra dependencies. **Audio dictation needs a text-to-speech binary**, which MecanoPro looks for in this order and uses the first one it finds:
-
-1. **Piper** — neural voices, best quality
-2. **`espeak-ng`** — synthetic, widely packaged
-3. **`espeak`** — older fallback
-4. **`spd-say`** — speech-dispatcher
-
-If none is present, dictation is unavailable; every other mode still works.
-
-### Quick setup — eSpeak NG
-
-The fastest path. One package, no models to download:
-
-```bash
-sudo pacman -S espeak-ng        # Arch / CachyOS
-sudo apt install espeak-ng      # Debian / Ubuntu
-sudo dnf install espeak-ng      # Fedora
-```
-
-This enables the two synthetic voice presets (`es-419+f3` Latin American, `es+f3` Spain).
-
-### Best quality — Piper neural voices
-
-Piper additionally needs an audio player. MecanoPro looks for `paplay`, then `pw-play`, then `aplay`:
-
-```bash
-sudo pacman -S libpulse         # provides paplay
-```
-
-Then place the Piper binary and its voice models under MecanoPro's data directory:
-
-```
-~/.local/share/mecanopro/piper/
-├── piper                       # the piper binary (or leave it on your PATH)
-└── models/
-    ├── es_AR-daniela-high.onnx
-    ├── es_AR-daniela-high.onnx.json
-    ├── es_MX-claude-high.onnx
-    └── es_MX-claude-high.onnx.json
-```
-
-Each voice is two files: the `.onnx` model and its `.onnx.json` config, which Piper reads from beside the model. **One voice is enough to get started** — if the selected preset has no matching model, MecanoPro falls back to any `.onnx` it finds in `models/`.
-
-Download the binary from [rhasspy/piper](https://github.com/rhasspy/piper/releases) and the Spanish voices from [the Piper voices collection](https://huggingface.co/rhasspy/piper-voices/tree/main/es). A `piper` binary already on your `PATH` also works, as long as `models/` sits at the path above.
-
-Voices are selected in-app; `Tab` replays the current word and `+` / `-` adjust speech rate.
 
 ## Your Data
 

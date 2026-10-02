@@ -165,8 +165,8 @@ impl ProgressRepository {
             .unwrap_or_default()
             .as_secs();
 
-        // completed_lessons and tier unlock are Lesson-only: a Drill or a
-        // Dictation session structurally cannot write a BestScore or
+        // completed_lessons and tier unlock are Lesson-only: a Drill (or a
+        // legacy Dictation record) structurally cannot write a BestScore or
         // advance the tier frontier.
         if let SessionKind::Lesson {
             lesson_id,
@@ -228,7 +228,7 @@ impl ProgressRepository {
         progress.record_word_observations(word_observations);
 
         // total_practice_seconds is typing wall-clock only (design D0):
-        // Lesson/Drill accrue, Dictation does not. Exhaustive on purpose —
+        // Lesson/Drill accrue, the legacy Dictation kind does not. Exhaustive on purpose —
         // no wildcard arm — so a future SessionKind variant forces this
         // clock-basis question to be answered explicitly.
         match &kind {
@@ -322,6 +322,7 @@ impl Default for ProgressRepository {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::model::SessionKindTag;
     use tempfile::tempdir;
 
     #[test]
@@ -363,6 +364,96 @@ mod tests {
         // the serde field default (not rejected), then migrated in memory to
         // the current schema by load()'s call to `UserProgress::migrate()`.
         assert_eq!(progress.version, crate::core::model::SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn test_legacy_file_with_removed_session_kind_loads_without_quarantine() {
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("progress.json");
+        fs::write(
+            &file_path,
+            r#"{
+                "version": 2,
+                "completed_lessons": {
+                    "t1-l1": {"cpm": 155.0, "accuracy": 98.5, "completed_at": 1700000000, "passed": true}
+                },
+                "unlocked_tier": "Tier2FullAlphabet",
+                "total_practice_seconds": 42,
+                "key_stats": {
+                    "a": {"attempts": 3, "errors": 1, "total_latency_ms": 450}
+                },
+                "sessions": [
+                    {
+                        "completed_at": 1700000100,
+                        "duration_secs": 30,
+                        "summary": {
+                            "cpm": 120.0, "raw_wpm": 24.0, "net_wpm": 22.0,
+                            "accuracy": 97.0, "consistency": 80.0,
+                            "total_keystrokes": 60, "correct_keystrokes": 58, "error_count": 2
+                        },
+                        "kind": {
+                            "kind": "Dictation",
+                            "avg_reaction_time_ms": 900.0,
+                            "min_reaction_time_ms": 400.0,
+                            "max_reaction_time_ms": 1500.0,
+                            "total_words": 10,
+                            "completed_words": 9
+                        }
+                    }
+                ],
+                "buckets": [
+                    {
+                        "day": 19000,
+                        "kind": "Dictation",
+                        "sessions": 4,
+                        "duration_secs": 120,
+                        "total_keystrokes": 200,
+                        "correct_keystrokes": 190,
+                        "error_count": 10,
+                        "consistency_keystroke_weighted": 16000.0
+                    }
+                ]
+            }"#,
+        )
+        .unwrap();
+
+        let repo = ProgressRepository::with_path(&file_path);
+        let progress = repo.load();
+
+        // Not quarantined: no progress.corrupt-* file, original still in place.
+        let quarantined = fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                e.file_name()
+                    .to_string_lossy()
+                    .starts_with("progress.corrupt-")
+            })
+            .count();
+        assert_eq!(quarantined, 0);
+        assert!(file_path.exists());
+        assert!(!progress.load_degraded);
+
+        // The legacy session and bucket survive the load.
+        assert_eq!(progress.sessions.len(), 1);
+        assert!(matches!(
+            progress.sessions[0].kind,
+            SessionKind::Dictation {
+                total_words: 10,
+                completed_words: 9,
+                ..
+            }
+        ));
+        assert_eq!(progress.buckets.len(), 1);
+        assert_eq!(progress.buckets[0].kind, SessionKindTag::Dictation);
+        assert_eq!(progress.buckets[0].sessions, 4);
+
+        // Everything else is intact.
+        assert_eq!(progress.completed_lessons.len(), 1);
+        assert!(progress.completed_lessons["t1-l1"].passed);
+        assert_eq!(progress.unlocked_tier, Tier::Tier2FullAlphabet);
+        assert_eq!(progress.total_practice_seconds, 42);
+        assert_eq!(progress.key_stats[&'a'].attempts, 3);
     }
 
     #[test]
